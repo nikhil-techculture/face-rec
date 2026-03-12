@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+backend/uploads/*
+backend/models/encodings.pkl
+backend/.env
+
+# Node
+node_modules/
+api/.env
+
+# OS
+.DS_Store
+Thumbs.db

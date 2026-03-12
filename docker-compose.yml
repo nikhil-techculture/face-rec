@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  python-backend:
+    build: ./backend
+    container_name: face-rec-python
+    restart: unless-stopped
+    environment:
+      - PORT=8000
+      - ALLOWED_ORIGINS=http://localhost:3000
+      - MAX_FILE_SIZE_MB=10
+    volumes:
+      - face_models:/app/models
+    networks:
+      - face-rec-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  node-gateway:
+    build: ./api
+    container_name: face-rec-gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - PYTHON_API_URL=http://python-backend:8000
+      - ALLOWED_ORIGINS=*
+    depends_on:
+      python-backend:
+        condition: service_healthy
+    networks:
+      - face-rec-net
+
+volumes:
+  face_models:
+
+networks:
+  face-rec-net:
+    driver: bridge

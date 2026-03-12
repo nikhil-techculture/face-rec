@@ -1,0 +1,450 @@
+{
+	"info": {
+		"_postman_id": "face-rec-collection-v1",
+		"name": "Face Recognition API",
+		"description": "Complete Face Recognition System - Register reference faces and match uploaded images.\n\n**Base URL:** http://localhost:3000\n\n**Flow:**\n1. Run `/health` to verify both services are up\n2. Use `/api/setup` to register a reference face\n3. Use `/api/match` to compare any face against the registered one\n4. Use `/api/labels` to see all registered faces\n5. Use `/api/labels/:label` DELETE to remove a face",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:3000",
+			"type": "string"
+		},
+		{
+			"key": "python_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "label",
+			"value": "user_001",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Health & Status",
+			"item": [
+				{
+					"name": "Gateway Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						},
+						"description": "Check if both Node.js gateway and Python backend are running.\n\nExpected response:\n```json\n{\n  \"gateway\": \"ok\",\n  \"python_service\": { \"status\": \"healthy\" }\n}\n```"
+					},
+					"response": [
+						{
+							"name": "Both services healthy",
+							"originalRequest": {
+								"method": "GET",
+								"url": { "raw": "{{base_url}}/health" }
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n    \"gateway\": \"ok\",\n    \"python_service\": {\n        \"status\": \"healthy\"\n    }\n}"
+						}
+					]
+				},
+				{
+					"name": "Python API Direct Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{python_url}}/health",
+							"host": ["{{python_url}}"],
+							"path": ["health"]
+						},
+						"description": "Directly hit the Python FastAPI backend health endpoint."
+					},
+					"response": []
+				},
+				{
+					"name": "Python API Docs (Swagger)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{python_url}}/docs",
+							"host": ["{{python_url}}"],
+							"path": ["docs"]
+						},
+						"description": "Open FastAPI auto-generated Swagger UI in browser."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Face Management",
+			"item": [
+				{
+					"name": "Setup - Register Reference Face",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "label",
+									"value": "{{label}}",
+									"description": "Unique ID for this person (e.g. user ID, name, employee code)",
+									"type": "text"
+								},
+								{
+									"key": "image",
+									"description": "Reference face image (JPG/PNG/WEBP, max 10MB). Select a clear front-facing photo.",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/setup",
+							"host": ["{{base_url}}"],
+							"path": ["api", "setup"]
+						},
+						"description": "## Register a Reference Face\n\nUpload a reference/ground-truth face image under a unique label.\nThis image will be stored as the encoding to compare against in future match requests.\n\n**Fields:**\n- `label` — unique string identifier (e.g. `user_001`, `john_doe`, `emp_123`)\n- `image` — face image file (JPG, PNG, WEBP)\n\n**Success Response (201):**\n```json\n{\n  \"success\": true,\n  \"message\": \"Face registered successfully for label 'user_001'.\"\n}\n```\n\n**Error - No face detected (422):**\n```json\n{\n  \"detail\": \"No face detected in the setup image.\"\n}\n```"
+					},
+					"response": [
+						{
+							"name": "Face registered successfully",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{ "key": "label", "value": "user_001", "type": "text" },
+										{ "key": "image", "type": "file", "src": [] }
+									]
+								},
+								"url": { "raw": "{{base_url}}/api/setup" }
+							},
+							"status": "Created",
+							"code": 201,
+							"body": "{\n    \"success\": true,\n    \"message\": \"Face registered successfully for label 'user_001'.\"\n}"
+						},
+						{
+							"name": "No face detected in image",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{ "key": "label", "value": "user_001", "type": "text" },
+										{ "key": "image", "type": "file", "src": [] }
+									]
+								},
+								"url": { "raw": "{{base_url}}/api/setup" }
+							},
+							"status": "Unprocessable Entity",
+							"code": 422,
+							"body": "{\n    \"detail\": \"No face detected in the setup image.\"\n}"
+						}
+					]
+				},
+				{
+					"name": "List All Registered Labels",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/labels",
+							"host": ["{{base_url}}"],
+							"path": ["api", "labels"]
+						},
+						"description": "Returns all registered face labels with count.\n\n**Response:**\n```json\n{\n  \"labels\": [\"user_001\", \"admin\", \"emp_123\"],\n  \"count\": 3\n}\n```"
+					},
+					"response": [
+						{
+							"name": "Labels list",
+							"originalRequest": {
+								"method": "GET",
+								"url": { "raw": "{{base_url}}/api/labels" }
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n    \"labels\": [\"user_001\"],\n    \"count\": 1\n}"
+						}
+					]
+				},
+				{
+					"name": "Delete a Label",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/labels/{{label}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "labels", "{{label}}"]
+						},
+						"description": "Delete a registered face label and its stored encoding.\n\n**Success Response:**\n```json\n{\n  \"success\": true,\n  \"message\": \"Label 'user_001' deleted.\"\n}\n```\n\n**Not Found (404):**\n```json\n{\n  \"detail\": \"Label 'user_001' not found.\"\n}\n```"
+					},
+					"response": [
+						{
+							"name": "Label deleted",
+							"originalRequest": {
+								"method": "DELETE",
+								"url": { "raw": "{{base_url}}/api/labels/user_001" }
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n    \"success\": true,\n    \"message\": \"Label 'user_001' deleted.\"\n}"
+						},
+						{
+							"name": "Label not found",
+							"originalRequest": {
+								"method": "DELETE",
+								"url": { "raw": "{{base_url}}/api/labels/user_001" }
+							},
+							"status": "Not Found",
+							"code": 404,
+							"body": "{\n    \"detail\": \"Label 'user_001' not found.\"\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Face Matching",
+			"item": [
+				{
+					"name": "Match Face - Default Tolerance",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "label",
+									"value": "{{label}}",
+									"description": "Label of the registered reference face to compare against",
+									"type": "text"
+								},
+								{
+									"key": "image",
+									"description": "Face image to verify (JPG/PNG/WEBP, max 10MB)",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/match",
+							"host": ["{{base_url}}"],
+							"path": ["api", "match"]
+						},
+						"description": "## Match a Face\n\nCompare an uploaded face image against the registered reference face for a given label.\nUses default tolerance of **0.5**.\n\n**Fields:**\n- `label` — the registered label to compare against\n- `image` — face image to verify\n\n**Match Response:**\n```json\n{\n  \"match\": true,\n  \"confidence\": 87.34,\n  \"distance\": 0.1266,\n  \"message\": \"Face matched successfully.\"\n}\n```\n\n**No Match Response:**\n```json\n{\n  \"match\": false,\n  \"confidence\": 33.82,\n  \"distance\": 0.6618,\n  \"message\": \"Face does not match.\"\n}\n```\n\n**confidence** — 0 to 100 (higher = more similar)\n**distance** — 0 to 1 (lower = more similar, <0.5 = match)"
+					},
+					"response": [
+						{
+							"name": "Match - Same person",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{ "key": "label", "value": "user_001", "type": "text" },
+										{ "key": "image", "type": "file", "src": [] }
+									]
+								},
+								"url": { "raw": "{{base_url}}/api/match" }
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n    \"match\": true,\n    \"confidence\": 87.34,\n    \"distance\": 0.1266,\n    \"message\": \"Face matched successfully.\"\n}"
+						},
+						{
+							"name": "No Match - Different person",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{ "key": "label", "value": "user_001", "type": "text" },
+										{ "key": "image", "type": "file", "src": [] }
+									]
+								},
+								"url": { "raw": "{{base_url}}/api/match" }
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n    \"match\": false,\n    \"confidence\": 33.82,\n    \"distance\": 0.6618,\n    \"message\": \"Face does not match.\"\n}"
+						},
+						{
+							"name": "Label not registered",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{ "key": "label", "value": "unknown_user", "type": "text" },
+										{ "key": "image", "type": "file", "src": [] }
+									]
+								},
+								"url": { "raw": "{{base_url}}/api/match" }
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n    \"match\": false,\n    \"confidence\": 0.0,\n    \"message\": \"No registered face found for label 'unknown_user'. Please setup first.\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Match Face - Strict (tolerance 0.4)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "label",
+									"value": "{{label}}",
+									"type": "text"
+								},
+								{
+									"key": "image",
+									"description": "Face image to verify",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "tolerance",
+									"value": "0.4",
+									"description": "Strict mode — only very close matches will pass",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/match",
+							"host": ["{{base_url}}"],
+							"path": ["api", "match"]
+						},
+						"description": "Strict matching — tolerance 0.4.\nOnly very high confidence matches will return `match: true`.\nGood for high-security use cases."
+					},
+					"response": []
+				},
+				{
+					"name": "Match Face - Lenient (tolerance 0.6)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "label",
+									"value": "{{label}}",
+									"type": "text"
+								},
+								{
+									"key": "image",
+									"description": "Face image to verify",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "tolerance",
+									"value": "0.6",
+									"description": "Lenient mode — accepts lower quality photos or slight angle differences",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/match",
+							"host": ["{{base_url}}"],
+							"path": ["api", "match"]
+						},
+						"description": "Lenient matching — tolerance 0.6.\nAccepts more variation — useful for low quality images or different lighting/angles."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Error Cases",
+			"item": [
+				{
+					"name": "Setup - Missing label field",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "image",
+									"description": "Image without label — should return 400",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/setup",
+							"host": ["{{base_url}}"],
+							"path": ["api", "setup"]
+						},
+						"description": "Test missing `label` field.\n\nExpected: `400 Bad Request`\n```json\n{ \"error\": \"Field 'label' is required.\" }\n```"
+					},
+					"response": []
+				},
+				{
+					"name": "Match - Label not registered",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "label",
+									"value": "nonexistent_user",
+									"type": "text"
+								},
+								{
+									"key": "image",
+									"description": "Any face image",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/match",
+							"host": ["{{base_url}}"],
+							"path": ["api", "match"]
+						},
+						"description": "Test matching against a label that was never registered.\n\nExpected: `200 OK` with `match: false` and message explaining label not found."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete - Non-existent label",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/labels/does_not_exist",
+							"host": ["{{base_url}}"],
+							"path": ["api", "labels", "does_not_exist"]
+						},
+						"description": "Test deleting a label that doesn't exist.\n\nExpected: `404 Not Found`\n```json\n{ \"detail\": \"Label 'does_not_exist' not found.\" }\n```"
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}
