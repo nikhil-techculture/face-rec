@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "face-rec-collection-v1",
 		"name": "Face Recognition API",
-		"description": "Complete Face Recognition System - Register reference faces and match uploaded images.\n\n**Base URL:** http://localhost:1005\n\n**Flow:**\n1. Run `/health` to verify both services are up\n2. Use `/api/setup` to register a reference face\n3. Use `/api/match` to compare any face against the registered one\n4. Use `/api/labels` to see all registered faces\n5. Use `/api/labels/:label` DELETE to remove a face",
+		"description": "Complete Face Recognition System - Register reference faces and match uploaded images.\n\n**Base URL:** http://localhost:1005\n\n**Flow:**\n1. Run `/health` to verify both services are up\n2. Use `/api/setup` to register a reference face (file or base64)\n3. Use `/api/match` to compare any face against the registered one\n4. If matched, use `matched_image_url` to fetch registered reference image\n5. Use `/api/labels` to see all registered faces\n6. Use `/api/labels/:label` DELETE to remove a face",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -19,6 +19,11 @@
 		{
 			"key": "label",
 			"value": "user_001",
+			"type": "string"
+		},
+		{
+			"key": "image_base64",
+			"value": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
 			"type": "string"
 		}
 	],
@@ -111,7 +116,7 @@
 							"host": ["{{base_url}}"],
 							"path": ["api", "setup"]
 						},
-						"description": "## Register a Reference Face\n\nUpload a reference/ground-truth face image under a unique label.\nThis image will be stored as the encoding to compare against in future match requests.\n\n**Fields:**\n- `label` — unique string identifier (e.g. `user_001`, `john_doe`, `emp_123`)\n- `image` — face image file (JPG, PNG, WEBP)\n\n**Success Response (201):**\n```json\n{\n  \"success\": true,\n  \"message\": \"Face registered successfully for label 'user_001'.\"\n}\n```\n\n**Error - No face detected (422):**\n```json\n{\n  \"detail\": \"No face detected in the setup image.\"\n}\n```"
+						"description": "## Register a Reference Face\n\nUpload a reference/ground-truth face image under a unique label.\nThis image will be stored as the encoding to compare against in future match requests.\n\n**Fields:**\n- `label` — unique string identifier (e.g. `user_001`, `john_doe`, `emp_123`)\n- `image` — face image file (JPG, PNG, WEBP)\n- `imageBase64` — optional base64 image string (data URL or raw base64)\n\n**Success Response (201):**\n```json\n{\n  \"success\": true,\n  \"message\": \"Face registered successfully for label 'user_001'.\"\n}\n```\n\n**Error - No face detected (422):**\n```json\n{\n  \"detail\": \"No face detected in the setup image.\"\n}\n```"
 					},
 					"response": [
 						{
@@ -149,6 +154,34 @@
 							"body": "{\n    \"detail\": \"No face detected in the setup image.\"\n}"
 						}
 					]
+				},
+				{
+					"name": "Setup - Register Reference Face (Base64 JSON)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"label\": \"{{label}}\",\n  \"imageBase64\": \"{{image_base64}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/setup",
+							"host": ["{{base_url}}"],
+							"path": ["api", "setup"]
+						},
+						"description": "Register a reference face using JSON body with `imageBase64`."
+					},
+					"response": []
 				},
 				{
 					"name": "List All Registered Labels",
@@ -209,6 +242,20 @@
 							"body": "{\n    \"detail\": \"Label 'user_001' not found.\"\n}"
 						}
 					]
+				},
+				{
+					"name": "Get Registered Reference Image",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/images/{{label}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "images", "{{label}}"]
+						},
+						"description": "Fetch the stored registered reference image for a label."
+					},
+					"response": []
 				}
 			]
 		},
@@ -242,7 +289,7 @@
 							"host": ["{{base_url}}"],
 							"path": ["api", "match"]
 						},
-						"description": "## Match a Face\n\nCompare an uploaded face image against the registered reference face for a given label.\nUses default tolerance of **0.5**.\n\n**Fields:**\n- `label` — the registered label to compare against\n- `image` — face image to verify\n\n**Match Response:**\n```json\n{\n  \"match\": true,\n  \"confidence\": 87.34,\n  \"distance\": 0.1266,\n  \"message\": \"Face matched successfully.\"\n}\n```\n\n**No Match Response:**\n```json\n{\n  \"match\": false,\n  \"confidence\": 33.82,\n  \"distance\": 0.6618,\n  \"message\": \"Face does not match.\"\n}\n```\n\n**confidence** — 0 to 100 (higher = more similar)\n**distance** — 0 to 1 (lower = more similar, <0.5 = match)"
+						"description": "## Match a Face\n\nCompare an uploaded face image against the registered reference face for a given label.\nUses default tolerance of **0.5**.\n\n**Fields:**\n- `label` — the registered label to compare against\n- `image` — face image to verify\n- `imageBase64` — optional base64 image string (data URL or raw base64)\n\n**Match Response:**\n```json\n{\n  \"match\": true,\n  \"confidence\": 87.34,\n  \"distance\": 0.1266,\n  \"matched_image_url\": \"/api/images/user_001\",\n  \"message\": \"Face matched successfully.\"\n}\n```\n\n**No Match Response:**\n```json\n{\n  \"match\": false,\n  \"confidence\": 33.82,\n  \"distance\": 0.6618,\n  \"message\": \"Face does not match.\"\n}\n```\n\n**confidence** — 0 to 100 (higher = more similar)\n**distance** — 0 to 1 (lower = more similar, <0.5 = match)"
 					},
 					"response": [
 						{
@@ -260,7 +307,7 @@
 							},
 							"status": "OK",
 							"code": 200,
-							"body": "{\n    \"match\": true,\n    \"confidence\": 87.34,\n    \"distance\": 0.1266,\n    \"message\": \"Face matched successfully.\"\n}"
+							"body": "{\n    \"match\": true,\n    \"confidence\": 87.34,\n    \"distance\": 0.1266,\n    \"matched_image_url\": \"/api/images/user_001\",\n    \"message\": \"Face matched successfully.\"\n}"
 						},
 						{
 							"name": "No Match - Different person",
@@ -297,6 +344,34 @@
 							"body": "{\n    \"match\": false,\n    \"confidence\": 0.0,\n    \"message\": \"No registered face found for label 'unknown_user'. Please setup first.\"\n}"
 						}
 					]
+				},
+				{
+					"name": "Match Face - Base64 JSON",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"label\": \"{{label}}\",\n  \"imageBase64\": \"{{image_base64}}\",\n  \"tolerance\": 0.5\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/match",
+							"host": ["{{base_url}}"],
+							"path": ["api", "match"]
+						},
+						"description": "Match using JSON body with `imageBase64`; when `match=true`, response includes `matched_image_url`."
+					},
+					"response": []
 				},
 				{
 					"name": "Match Face - Strict (tolerance 0.4)",

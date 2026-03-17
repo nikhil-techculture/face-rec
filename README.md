@@ -55,11 +55,12 @@ All requests go through the Node.js gateway at `http://localhost:1005`.
 
 ```
 POST /api/setup
-Content-Type: multipart/form-data
+Content-Type: multipart/form-data OR application/json
 
 Fields:
   label  (string)  — unique ID for this face, e.g. "user_123"
   image  (file)    — reference face image (JPG/PNG/WEBP, max 10MB)
+  imageBase64 (string) — optional alternative to image file (data URL or raw base64)
 ```
 
 **Response:**
@@ -73,11 +74,12 @@ Fields:
 
 ```
 POST /api/match
-Content-Type: multipart/form-data
+Content-Type: multipart/form-data OR application/json
 
 Fields:
   label      (string)  — label of the registered reference face
   image      (file)    — image to verify
+  imageBase64 (string) — optional alternative to image file (data URL or raw base64)
   tolerance  (number)  — optional, default 0.5 (0.4=strict, 0.6=lenient)
 ```
 
@@ -87,6 +89,7 @@ Fields:
   "match": true,
   "confidence": 87.34,
   "distance": 0.1266,
+  "matched_image_url": "/api/images/user_123",
   "message": "Face matched successfully."
 }
 ```
@@ -134,6 +137,14 @@ DELETE /api/labels/:label
 ```
 GET /health
 ```
+
+### Get Matched Reference Image
+
+```
+GET /api/images/:label
+```
+
+Returns the registered reference image for that label.
 
 ---
 
