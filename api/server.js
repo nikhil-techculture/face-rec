@@ -10,8 +10,8 @@ const rateLimit = require("express-rate-limit");
 const errorHandler = require("./middleware/errorHandler");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:8000";
+const PORT = process.env.PORT || 1005;
+const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:1001";
 
 // Security & logging middleware
 app.use(helmet());
@@ -56,7 +56,7 @@ async function forwardToPython(endpoint, fields, fileBuffer, fileName, mimeType)
 
   const response = await axios.post(`${PYTHON_API}${endpoint}`, form, {
     headers: form.getHeaders(),
-    timeout: 30000
+    timeout: 10050
   });
   return response.data;
 }

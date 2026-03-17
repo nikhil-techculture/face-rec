@@ -2,18 +2,18 @@
 	"info": {
 		"_postman_id": "face-rec-collection-v1",
 		"name": "Face Recognition API",
-		"description": "Complete Face Recognition System - Register reference faces and match uploaded images.\n\n**Base URL:** http://localhost:3000\n\n**Flow:**\n1. Run `/health` to verify both services are up\n2. Use `/api/setup` to register a reference face\n3. Use `/api/match` to compare any face against the registered one\n4. Use `/api/labels` to see all registered faces\n5. Use `/api/labels/:label` DELETE to remove a face",
+		"description": "Complete Face Recognition System - Register reference faces and match uploaded images.\n\n**Base URL:** http://localhost:1005\n\n**Flow:**\n1. Run `/health` to verify both services are up\n2. Use `/api/setup` to register a reference face\n3. Use `/api/match` to compare any face against the registered one\n4. Use `/api/labels` to see all registered faces\n5. Use `/api/labels/:label` DELETE to remove a face",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
 		{
 			"key": "base_url",
-			"value": "http://localhost:3000",
+			"value": "http://localhost:1005",
 			"type": "string"
 		},
 		{
 			"key": "python_url",
-			"value": "http://localhost:8000",
+			"value": "http://localhost:1001",
 			"type": "string"
 		},
 		{

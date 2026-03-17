@@ -6,15 +6,15 @@ services:
     container_name: face-rec-python
     restart: unless-stopped
     environment:
-      - PORT=8000
-      - ALLOWED_ORIGINS=http://localhost:3000
+      - PORT=1001
+      - ALLOWED_ORIGINS=http://localhost:1005
       - MAX_FILE_SIZE_MB=10
     volumes:
       - face_models:/app/models
     networks:
       - face-rec-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:1001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -24,10 +24,10 @@ services:
     container_name: face-rec-gateway
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "1005:1005"
     environment:
-      - PORT=3000
-      - PYTHON_API_URL=http://python-backend:8000
+      - PORT=1005
+      - PYTHON_API_URL=http://python-backend:1001
       - ALLOWED_ORIGINS=*
     depends_on:
       python-backend:

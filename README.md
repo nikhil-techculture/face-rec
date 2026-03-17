@@ -7,7 +7,7 @@ A production-ready face recognition system with a **Python FastAPI** engine and 
 ## Architecture
 
 ```
-Client → Node.js Gateway (port 3000) → Python FastAPI Engine (port 8000)
+Client → Node.js Gateway (port 1005) → Python FastAPI Engine (port 1001)
 ```
 
 - **Python backend** handles all face encoding and matching using `face_recognition` (dlib).
@@ -21,7 +21,7 @@ Client → Node.js Gateway (port 3000) → Python FastAPI Engine (port 8000)
 docker-compose up --build
 ```
 
-The API will be available at `http://localhost:3000`.
+The API will be available at `http://localhost:1005`.
 
 ---
 
@@ -33,7 +33,7 @@ The API will be available at `http://localhost:3000`.
 cd backend
 cp .env.example .env
 pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app:app --host 0.0.0.0 --port 1001 --reload
 ```
 
 ### Node.js Gateway
@@ -49,7 +49,7 @@ npm run dev
 
 ## API Reference
 
-All requests go through the Node.js gateway at `http://localhost:3000`.
+All requests go through the Node.js gateway at `http://localhost:1005`.
 
 ### Register a Reference Face
 
@@ -141,20 +141,20 @@ GET /health
 
 ```bash
 # 1. Register a reference face
-curl -X POST http://localhost:3000/api/setup \
+curl -X POST http://localhost:1005/api/setup \
   -F "label=user_123" \
   -F "image=@/path/to/reference.jpg"
 
 # 2. Match an uploaded face
-curl -X POST http://localhost:3000/api/match \
+curl -X POST http://localhost:1005/api/match \
   -F "label=user_123" \
   -F "image=@/path/to/test.jpg"
 
 # 3. List all labels
-curl http://localhost:3000/api/labels
+curl http://localhost:1005/api/labels
 
 # 4. Delete a label
-curl -X DELETE http://localhost:3000/api/labels/user_123
+curl -X DELETE http://localhost:1005/api/labels/user_123
 ```
 
 ---
@@ -165,7 +165,7 @@ curl -X DELETE http://localhost:3000/api/labels/user_123
 
 | Variable          | Default | Description                        |
 |-------------------|---------|------------------------------------|
-| PORT              | 8000    | Python server port                 |
+| PORT              | 1001    | Python server port                 |
 | ALLOWED_ORIGINS   | *       | Comma-separated CORS origins       |
 | MAX_FILE_SIZE_MB  | 10      | Max upload size in MB              |
 
@@ -173,8 +173,8 @@ curl -X DELETE http://localhost:3000/api/labels/user_123
 
 | Variable          | Default                    | Description                  |
 |-------------------|----------------------------|------------------------------|
-| PORT              | 3000                       | Node.js gateway port         |
-| PYTHON_API_URL    | http://localhost:8000      | Python backend URL           |
+| PORT              | 1005                       | Node.js gateway port         |
+| PYTHON_API_URL    | http://localhost:1001      | Python backend URL           |
 | ALLOWED_ORIGINS   | *                          | Comma-separated CORS origins |
 
 ---
