@@ -108,6 +108,42 @@ def match_face(image_path: str, label: str, tolerance: float = 0.5) -> dict:
     return result
 
 
+def match_two_faces(reference_image_path: str, image_path: str, tolerance: float = 0.5) -> dict:
+    """
+    Compare a probe image against a reference image directly.
+    Returns match result with confidence score.
+    """
+    reference_encoding = encode_image(reference_image_path)
+    if reference_encoding is None:
+        return {
+            "match": False,
+            "confidence": 0.0,
+            "message": "No face detected in the reference image."
+        }
+
+    unknown_encoding = encode_image(image_path)
+    if unknown_encoding is None:
+        return {
+            "match": False,
+            "confidence": 0.0,
+            "message": "No face detected in the uploaded image."
+        }
+
+    reference_np = np.array(reference_encoding)
+    unknown_np = np.array(unknown_encoding)
+
+    face_distance = face_recognition.face_distance([reference_np], unknown_np)[0]
+    is_match = bool(face_distance <= tolerance)
+    confidence = round((1 - float(face_distance)) * 100, 2)
+
+    return {
+        "match": is_match,
+        "confidence": confidence,
+        "distance": round(float(face_distance), 4),
+        "message": "Face matched successfully." if is_match else "Face does not match."
+    }
+
+
 def list_registered_labels() -> list:
     """Return all registered face labels."""
     data = _load_encodings()

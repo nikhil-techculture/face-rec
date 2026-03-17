@@ -12,6 +12,7 @@ const errorHandler = require("./middleware/errorHandler");
 const app = express();
 const PORT = process.env.PORT || 1005;
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:1001";
+const CMS_PROFILE_URL = process.env.CMS_PROFILE_URL || "https://cms.ezwealth.in/api/auth-client/profile";
 
 // Security & logging middleware
 app.use(helmet());
@@ -94,6 +95,89 @@ function parseBase64Image(input) {
     };
   } catch {
     return null;
+  }
+}
+
+function extractClientProfile(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  if (payload.digioDetails) return payload;
+  if (payload.data && typeof payload.data === "object") {
+    if (payload.data.digioDetails) return payload.data;
+    if (payload.data.profile && payload.data.profile.digioDetails) return payload.data.profile;
+    if (Array.isArray(payload.data.items)) {
+      const match = payload.data.items.find((item) => item && item.digioDetails);
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
+function extractAadhaarImage(profile) {
+  const actions = profile?.digioDetails?.actions;
+  if (!Array.isArray(actions)) return null;
+
+  for (const action of actions) {
+    const image = action?.details?.aadhaar?.image;
+    if (typeof image === "string" && image.trim()) {
+      return image.trim();
+    }
+  }
+  return null;
+}
+
+function extractClientId(profile) {
+  if (!profile || typeof profile !== "object") return null;
+  if (typeof profile.clientId === "string" && profile.clientId.trim()) return profile.clientId;
+  if (profile._id && typeof profile._id === "object" && typeof profile._id.$oid === "string") return profile._id.$oid;
+  if (typeof profile._id === "string" && profile._id.trim()) return profile._id;
+  if (typeof profile.id === "string" && profile.id.trim()) return profile.id;
+  if (typeof profile.mobileNo === "string" && profile.mobileNo.trim()) return profile.mobileNo;
+  return null;
+}
+
+async function fetchProfileByToken(rawToken, authorizationHeader) {
+  const token = (rawToken || "").trim();
+  const bearer = authorizationHeader && authorizationHeader.trim()
+    ? authorizationHeader.trim()
+    : (token ? `Bearer ${token}` : "");
+
+  if (!bearer) {
+    console.error("[CMS_PROFILE] Missing token for profile fetch.");
+    throw new Error("Missing token. Provide Authorization header or token field.");
+  }
+
+  try {
+    const { data } = await axios.get(CMS_PROFILE_URL, {
+      headers: { Authorization: bearer },
+      timeout: 12000
+    });
+
+
+    const profile = extractClientProfile(data.data);
+    if (!profile) {
+      console.error("[CMS_PROFILE] Profile extraction failed. Unexpected response shape from CMS.");
+      throw new Error("Unable to extract profile from CMS response.");
+    }
+    return profile;
+  } catch (err) {
+    const status = err.response?.status;
+    const body = err.response?.data;
+    let bodyPreview = "";
+    try {
+      bodyPreview = typeof body === "string"
+        ? body.slice(0, 500)
+        : JSON.stringify(body || {}).slice(0, 500);
+    } catch {
+      bodyPreview = "<unserializable-response-body>";
+    }
+
+    console.error("[CMS_PROFILE] Failed to fetch profile.", {
+      url: CMS_PROFILE_URL,
+      status: status || "no-response",
+      message: err.message,
+      bodyPreview
+    });
+    throw err;
   }
 }
 
@@ -181,6 +265,67 @@ app.post("/api/match", upload.single("image"), async (req, res, next) => {
   } catch (err) {
     if (err.response) {
       return res.status(err.response.status).json(err.response.data);
+    }
+    next(err);
+  }
+});
+
+
+/**
+ * POST /api/match-client
+ * Single-image match flow:
+ * 1) Pull reference Aadhaar image from CMS profile using token
+ * 2) Match uploaded image against pulled reference image
+ * 3) Return match result + client_id + matched image base64 (on success)
+ */
+app.post("/api/match-client", upload.single("image"), async (req, res, next) => {
+  try {
+    const { tolerance = "0.5", imageBase64, token, sessionToken } = req.body;
+
+    const base64Image = req.file ? null : parseBase64Image(imageBase64);
+    if (!req.file && !base64Image) {
+      return res.status(400).json({ error: "Provide either 'image' (file) or valid 'imageBase64'." });
+    }
+
+    const fileBuffer = req.file ? req.file.buffer : base64Image.buffer;
+    const fileName = req.file ? req.file.originalname : base64Image.fileName;
+    const mimeType = req.file ? req.file.mimetype : base64Image.mimeType;
+
+    const profile = await fetchProfileByToken(token || sessionToken || "", req.headers.authorization || "");
+    const clientId = extractClientId(profile);
+    const aadhaarImageBase64 = extractAadhaarImage(profile);
+
+    if (!aadhaarImageBase64) {
+      return res.status(422).json({ error: "Aadhaar image not found in CMS profile." });
+    }
+
+    const result = await forwardToPython(
+      "/match-direct",
+      {
+        tolerance,
+        referenceImageBase64: aadhaarImageBase64
+      },
+      fileBuffer,
+      fileName,
+      mimeType
+    );
+
+    result.client_id = clientId;
+    if (result.match) {
+      result.matched_image_base64 = aadhaarImageBase64;
+    }
+
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error("[MATCH_CLIENT] Request failed.", {
+      status: err.response?.status || "internal",
+      message: err.message
+    });
+    if (err.response) {
+      return res.status(err.response.status).json(err.response.data);
+    }
+    if (err.message && err.message.toLowerCase().includes("missing token")) {
+      return res.status(401).json({ error: err.message });
     }
     next(err);
   }

@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from face_engine import (
     register_face,
     match_face,
+    match_two_faces,
     list_registered_labels,
     delete_label,
     get_reference_image_path,
@@ -149,6 +150,30 @@ async def match_face_endpoint(
 
     if result.get("match") and result.get("matched_image_url"):
         result["matched_image_url"] = f"/api{result['matched_image_url']}"
+
+    return JSONResponse(status_code=200, content=result)
+
+
+@app.post("/match-direct", tags=["Face Matching"])
+async def match_direct_endpoint(
+    referenceImageBase64: str = Form(..., description="Reference image as base64 string"),
+    image: UploadFile | None = File(None, description="Image to verify against reference"),
+    imageBase64: str | None = Form(None, description="Image to verify as base64 string"),
+    tolerance: float = Form(0.5, description="Match tolerance (0.4=strict, 0.6=lenient)")
+):
+    """
+    Compare uploaded image with a provided reference base64 image.
+    """
+    if not 0.1 <= tolerance <= 0.9:
+        raise HTTPException(status_code=400, detail="Tolerance must be between 0.1 and 0.9")
+
+    reference_path = await save_base64_upload(referenceImageBase64)
+    path = await save_image_input(image, imageBase64)
+    try:
+        result = match_two_faces(str(reference_path), str(path), tolerance)
+    finally:
+        reference_path.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
 
     return JSONResponse(status_code=200, content=result)
 

@@ -94,6 +94,43 @@ Fields:
 }
 ```
 
+### Match Client Face (Single API with Token)
+
+Use this when you only want to send one image from frontend. The reference image is auto-fetched from CMS profile using token.
+
+```
+POST /api/match-client
+Content-Type: multipart/form-data OR application/json
+
+Fields:
+  image       (file)    — client selfie image to verify (or use imageBase64)
+  imageBase64 (string)  — optional alternative to image file
+  tolerance   (number)  — optional, default 0.5
+  token       (string)  — optional if Authorization header is used
+```
+
+Header (recommended):
+```
+Authorization: Bearer <sessionToken>
+```
+
+Flow:
+- Gateway calls `https://cms.ezwealth.in/api/auth-client/profile` with token.
+- Reads Aadhaar image from `digioDetails.actions[].details.aadhaar.image`.
+- Matches uploaded image against Aadhaar image.
+
+**Response (match):**
+```json
+{
+  "match": true,
+  "confidence": 90.12,
+  "distance": 0.0988,
+  "client_id": "69afe3b420902d7b7ee7c424",
+  "matched_image_base64": "<base64-from-cms>",
+  "message": "Face matched successfully."
+}
+```
+
 **Response (no match):**
 ```json
 {
@@ -159,6 +196,11 @@ curl -X POST http://localhost:1005/api/setup \
 # 2. Match an uploaded face
 curl -X POST http://localhost:1005/api/match \
   -F "label=user_123" \
+  -F "image=@/path/to/test.jpg"
+
+# 2b. Match with CMS token (single image from client)
+curl -X POST http://localhost:1005/api/match-client \
+  -H "Authorization: Bearer <sessionToken>" \
   -F "image=@/path/to/test.jpg"
 
 # 3. List all labels
