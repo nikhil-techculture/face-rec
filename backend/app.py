@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
+from typing import Optional
 
 from face_engine import (
     register_face,
@@ -88,7 +89,7 @@ async def save_base64_upload(image_base64: str) -> Path:
     return dest
 
 
-async def save_image_input(image: UploadFile | None, image_base64: str | None) -> Path:
+async def save_image_input(image: Optional[UploadFile], image_base64: Optional[str]) -> Path:
     if image is not None:
         return await save_upload(image)
     if image_base64:
