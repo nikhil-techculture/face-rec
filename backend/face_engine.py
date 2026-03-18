@@ -179,4 +179,4 @@ def get_reference_image_path(label: str) -> Optional[Path]:
     ref_path = REFERENCE_IMAGES_DIR / ref_file
     if not ref_path.exists():
         return None
-    return ref_path
+    return ref_path 
