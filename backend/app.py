@@ -110,8 +110,8 @@ def health():
 @app.post("/setup", tags=["Face Management"])
 async def setup_face(
     label: str = Form(..., description="Unique identifier for this face (e.g. user ID or name)"),
-    image: UploadFile | None = File(None, description="Reference face image"),
-    imageBase64: str | None = Form(None, description="Reference face image as base64 string")
+    image: Optional[UploadFile] = File(None, description="Reference face image"),
+    imageBase64: Optional[str] = Form(None, description="Reference face image as base64 string")
 ):
     """
     Register a reference face image under a label.
@@ -132,8 +132,8 @@ async def setup_face(
 @app.post("/match", tags=["Face Matching"])
 async def match_face_endpoint(
     label: str = Form(..., description="Label of the registered reference face"),
-    image: UploadFile | None = File(None, description="Image to verify against the reference"),
-    imageBase64: str | None = Form(None, description="Image to verify as base64 string"),
+    image: Optional[UploadFile] = File(None, description="Image to verify against the reference"),
+    imageBase64: Optional[str] = Form(None, description="Image to verify as base64 string"),
     tolerance: float = Form(0.5, description="Match tolerance (0.4=strict, 0.6=lenient)")
 ):
     """
@@ -158,8 +158,8 @@ async def match_face_endpoint(
 @app.post("/match-direct", tags=["Face Matching"])
 async def match_direct_endpoint(
     referenceImageBase64: str = Form(..., description="Reference image as base64 string"),
-    image: UploadFile | None = File(None, description="Image to verify against reference"),
-    imageBase64: str | None = Form(None, description="Image to verify as base64 string"),
+    image: Optional[UploadFile] = File(None, description="Image to verify against reference"),
+    imageBase64: Optional[str] = Form(None, description="Image to verify as base64 string"),
     tolerance: float = Form(0.5, description="Match tolerance (0.4=strict, 0.6=lenient)")
 ):
     """
