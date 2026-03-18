@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 import os
 import shutil
+import cv2
 from pathlib import Path
 from typing import Optional
 
@@ -179,4 +180,153 @@ def get_reference_image_path(label: str) -> Optional[Path]:
     ref_path = REFERENCE_IMAGES_DIR / ref_file
     if not ref_path.exists():
         return None
-    return ref_path 
+    return ref_path
+
+
+def validate_signature(image_path: str) -> dict:
+    """
+    Validate if an image contains a proper signature.
+    Filters out:
+    - Simple lines (starting/test lines)
+    - Random curly/scribble lines
+    - Insufficient or empty signatures
+    
+    Returns validation result with confidence score (0-100).
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return {
+                "valid": False,
+                "confidence": 0.0,
+                "message": "Could not read image file."
+            }
+
+        # Convert to grayscale and invert (white background, black strokes)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_inv = cv2.bitwise_not(gray)
+        
+        # Threshold to get binary image
+        _, binary = cv2.threshold(gray_inv, 127, 255, cv2.THRESH_BINARY)
+        
+        # Find contours (signature strokes)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return {
+                "valid": False,
+                "confidence": 0.0,
+                "message": "No signature strokes detected in image."
+            }
+        
+        # Get main contour (largest by area)
+        main_contour = max(contours, key=cv2.contourArea)
+        contour_area = cv2.contourArea(main_contour)
+        
+        # Check if contour is too small (empty signature)
+        image_area = img.shape[0] * img.shape[1]
+        area_ratio = contour_area / image_area if image_area > 0 else 0
+        
+        if area_ratio < 0.001:  # Less than 0.1% of image
+            return {
+                "valid": False,
+                "confidence": 10.0,
+                "message": "Signature area too small (empty or too light)."
+            }
+        
+        # Get contour bounding box
+        x, y, w, h = cv2.boundingRect(main_contour)
+        aspect_ratio = float(w) / h if h > 0 else 0
+        
+        # Check for line (aspect ratio too high = horizontal line)
+        if aspect_ratio > 8.0 or aspect_ratio < 0.125:
+            return {
+                "valid": False,
+                "confidence": 15.0,
+                "message": "Signature appears to be a simple line (not a valid signature)."
+            }
+        
+        # Fit ellipse to check straightness
+        if len(main_contour) >= 5:
+            ellipse = cv2.fitEllipse(main_contour)
+            ellipse_area = np.pi * (ellipse[1][0] / 2) * (ellipse[1][1] / 2)
+            solidity = contour_area / ellipse_area if ellipse_area > 0 else 0
+        else:
+            solidity = 0.0
+        
+        # Low solidity indicates scattered/random strokes
+        if solidity < 0.3:
+            return {
+                "valid": False,
+                "confidence": 20.0,
+                "message": "Signature appears to be random scribbles (not a valid signature)."
+            }
+        
+        # Calculate complexity: number of meaningful contours
+        valid_contours = [c for c in contours if cv2.contourArea(c) > contour_area * 0.05]
+        complexity = len(valid_contours)
+        
+        # Check for curvature / complexity
+        arc_length = cv2.arcLength(main_contour, False)
+        approx = cv2.approxPolyDP(main_contour, 0.02 * arc_length, False)
+        vertices = len(approx)
+        
+        # High vertex count indicates curves and complexity
+        complexity_score = min(100, (vertices - 4) * 2 + complexity * 5)
+        
+        # Valid signature criteria:
+        # - Solidity > 0.4 (not scattered)
+        # - Vertices > 10 (has curves/complexity)
+        # - Area ratio > 0.01 (substantial)
+        
+        is_valid = (
+            solidity > 0.35 and 
+            vertices > 8 and 
+            area_ratio > 0.005 and
+            aspect_ratio < 6.0
+        )
+        
+        confidence = min(100, complexity_score)
+        
+        if is_valid:
+            return {
+                "valid": True,
+                "confidence": confidence,
+                "message": "Valid signature detected.",
+                "metrics": {
+                    "solidity": round(float(solidity), 3),
+                    "vertices": int(vertices),
+                    "aspect_ratio": round(float(aspect_ratio), 2),
+                    "area_ratio": round(float(area_ratio), 4)
+                }
+            }
+        else:
+            reason = ""
+            if solidity <= 0.35:
+                reason = "Low solidity - appears to be random strokes."
+            elif vertices <= 8:
+                reason = "Insufficient complexity - too simple."
+            elif area_ratio <= 0.005:
+                reason = "Signature area too small."
+            elif aspect_ratio >= 6.0:
+                reason = "Signature is too linear - appears to be a line."
+            
+            return {
+                "valid": False,
+                "confidence": min(confidence, 50),
+                "message": f"Invalid signature: {reason}",
+                "metrics": {
+                    "solidity": round(float(solidity), 3),
+                    "vertices": int(vertices),
+                    "aspect_ratio": round(float(aspect_ratio), 2),
+                    "area_ratio": round(float(area_ratio), 4)
+                }
+            }
+    
+    except Exception as e:
+        return {
+            "valid": False,
+            "confidence": 0.0,
+            "message": f"Error validating signature: {str(e)}"
+        }
+

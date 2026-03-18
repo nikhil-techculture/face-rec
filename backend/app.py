@@ -18,6 +18,7 @@ from face_engine import (
     list_registered_labels,
     delete_label,
     get_reference_image_path,
+    validate_signature,
 )
 
 load_dotenv()
@@ -202,3 +203,26 @@ def get_reference_image(label: str):
     if path is None:
         raise HTTPException(status_code=404, detail=f"Reference image not found for label '{label}'.")
     return FileResponse(path)
+
+
+@app.post("/validate-signature", tags=["Signature Validation"])
+async def validate_signature_endpoint(
+    image: Optional[UploadFile] = File(None, description="Signature image to validate"),
+    imageBase64: Optional[str] = Form(None, description="Signature image as base64 string")
+):
+    """
+    Validate if an image contains a proper signature.
+    Detects and rejects:
+    - Simple lines (starting/test lines)
+    - Random curly/scribble lines
+    - Empty or insufficient signatures
+    
+    Returns validation result with confidence score (0-100).
+    """
+    path = await save_image_input(image, imageBase64)
+    try:
+        result = validate_signature(str(path))
+    finally:
+        path.unlink(missing_ok=True)
+
+    return JSONResponse(status_code=200, content=result)

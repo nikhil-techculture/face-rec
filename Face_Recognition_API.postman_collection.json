@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "face-rec-collection-direct-match-v1",
 		"name": "Face Recognition API - Direct Match Only",
-		"description": "Slim collection for direct client face matching only.\n\n**Base URL:** http://localhost:1005\n\n**Flow:**\n1. Send one client selfie image to `/api/match-client`\n2. Pass client token in Authorization header\n3. Gateway fetches Aadhaar image from CMS profile\n4. API returns match result with `client_id` and (on match) `matched_image_base64`",
+		"description": "Collection for direct client face matching and signature validation.\n\n**Base URL:** http://localhost:1005\n\n**Flow:**\n1. Send one client selfie image to `/api/match-client`\n2. Pass client token in Authorization header\n3. Gateway fetches Aadhaar image from CMS profile\n4. API returns match result with `client_id` and (on match) `matched_image_base64`\n\n**Signature Validation:**\n- Use `/api/validate-signature` to verify if uploaded sign is proper\n- Rejects simple lines, scribbles, and empty signatures",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -109,6 +109,89 @@
 							"path": ["api", "match-client"]
 						},
 						"description": "JSON variant for direct match using `imageBase64`."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Signature Validation",
+			"item": [
+				{
+					"name": "Validate Signature (Multipart)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "image",
+									"description": "Signature image to validate",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/validate-signature",
+							"host": ["{{base_url}}"],
+							"path": ["api", "validate-signature"]
+						},
+						"description": "Checks if uploaded sign is a proper signature and rejects simple lines/scribbles."
+					},
+					"response": [
+						{
+							"name": "Valid signature",
+							"originalRequest": {
+								"method": "POST",
+								"url": {
+									"raw": "{{base_url}}/api/validate-signature"
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"valid\": true,\n  \"confidence\": 78.5,\n  \"message\": \"Valid signature detected.\",\n  \"metrics\": {\n    \"solidity\": 0.512,\n    \"vertices\": 24,\n    \"aspect_ratio\": 1.45,\n    \"area_ratio\": 0.0234\n  }\n}"
+						},
+						{
+							"name": "Invalid signature",
+							"originalRequest": {
+								"method": "POST",
+								"url": {
+									"raw": "{{base_url}}/api/validate-signature"
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"valid\": false,\n  \"confidence\": 15.0,\n  \"message\": \"Signature appears to be a simple line (not a valid signature).\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Validate Signature (Base64 JSON)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"imageBase64\": \"{{image_base64}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/validate-signature",
+							"host": ["{{base_url}}"],
+							"path": ["api", "validate-signature"]
+						},
+						"description": "JSON variant for signature validation using `imageBase64`."
 					},
 					"response": []
 				}

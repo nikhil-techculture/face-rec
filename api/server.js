@@ -6,7 +6,6 @@ const FormData = require("form-data");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const cors = require("cors");
-const rateLimit = require("express-rate-limit");
 const errorHandler = require("./middleware/errorHandler");
 
 const app = express();
@@ -22,16 +21,6 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static("public"));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Too many requests. Please try again later." }
-});
-app.use("/api/", limiter);
 
 // Multer v2 — memory storage, 10MB limit
 const { memoryStorage } = multer;
@@ -357,6 +346,44 @@ app.delete("/api/labels/:label", async (req, res, next) => {
     res.json(data);
   } catch (err) {
     if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+
+/**
+ * POST /api/validate-signature
+ * Validate if an image contains a proper signature.
+ * Rejects simple lines, random scribbles, and empty signatures.
+ * Body (multipart/form-data):
+ *   - image: file    (signature image to validate, optional if imageBase64 provided)
+ *   - imageBase64: string  (signature as base64, optional if image file provided)
+ */
+app.post("/api/validate-signature", upload.single("image"), async (req, res, next) => {
+  try {
+    const { imageBase64 } = req.body;
+    const base64Image = req.file ? null : parseBase64Image(imageBase64);
+    
+    if (!req.file && !base64Image) {
+      return res.status(400).json({ error: "Provide either 'image' (file) or valid 'imageBase64'." });
+    }
+
+    const fileBuffer = req.file ? req.file.buffer : base64Image.buffer;
+    const fileName = req.file ? req.file.originalname : base64Image.fileName;
+    const mimeType = req.file ? req.file.mimetype : base64Image.mimeType;
+
+    const result = await forwardToPython(
+      "/validate-signature",
+      {},
+      fileBuffer,
+      fileName,
+      mimeType
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    if (err.response) {
+      return res.status(err.response.status).json(err.response.data);
+    }
     next(err);
   }
 });

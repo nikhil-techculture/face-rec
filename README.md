@@ -143,6 +143,58 @@ Flow:
 
 ---
 
+### Validate Signature (Plan Page)
+
+Validates if an image contains a proper signature for document signing.
+Automatically rejects:
+- Simple starting lines (not a valid signature)
+- Random curly/scribble lines (invalid)
+- Empty or minimal signatures
+
+```
+POST /api/validate-signature
+Content-Type: multipart/form-data OR application/json
+
+Fields:
+  image       (file)    — signature image to validate
+  imageBase64 (string)  — optional alternative: signature as base64 data URL or raw base64
+```
+
+**Response (valid signature):**
+```json
+{
+  "valid": true,
+  "confidence": 78.5,
+  "message": "Valid signature detected.",
+  "metrics": {
+    "solidity": 0.512,
+    "vertices": 24,
+    "aspect_ratio": 1.45,
+    "area_ratio": 0.0234
+  }
+}
+```
+
+**Response (rejected - simple line):**
+```json
+{
+  "valid": false,
+  "confidence": 15.0,
+  "message": "Signature appears to be a simple line (not a valid signature)."
+}
+```
+
+**Response (rejected - random scribbles):**
+```json
+{
+  "valid": false,
+  "confidence": 20.0,
+  "message": "Signature appears to be random scribbles (not a valid signature)."
+}
+```
+
+---
+
 ### List Registered Labels
 
 ```
@@ -203,10 +255,14 @@ curl -X POST http://localhost:1005/api/match-client \
   -H "Authorization: Bearer <sessionToken>" \
   -F "image=@/path/to/test.jpg"
 
-# 3. List all labels
+# 3. Validate a signature for plan page
+curl -X POST http://localhost:1005/api/validate-signature \
+  -F "image=@/path/to/signature.jpg"
+
+# 4. List all labels
 curl http://localhost:1005/api/labels
 
-# 4. Delete a label
+# 5. Delete a label
 curl -X DELETE http://localhost:1005/api/labels/user_123
 ```
 
