@@ -109,8 +109,8 @@ function buildBearerToken(rawToken, authorizationHeader) {
   return "";
 }
 
-function imageToDataUrl(buffer, mimeType) {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+function imageToBase64(buffer) {
+  return buffer.toString("base64");
 }
 
 function getImageInput(req) {
@@ -127,7 +127,7 @@ function getImageInput(req) {
     fileBuffer,
     fileName,
     mimeType,
-    dataUrl: imageToDataUrl(fileBuffer, mimeType)
+    base64: imageToBase64(fileBuffer)
   };
 }
 
@@ -372,7 +372,7 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
       try {
         const profileUpdate = await updateClientProfileImage(
           "selfieEkyc",
-          imageInput.dataUrl,
+          imageInput.base64,
           token || sessionToken || "",
           req.headers.authorization || ""
         );
@@ -467,7 +467,7 @@ app.post("/api/validate-signature", upload.single("image"), async (req, res, nex
       try {
         const profileUpdate = await updateClientProfileImage(
           "wetSignature",
-          imageInput.dataUrl,
+          imageInput.base64,
           token || sessionToken || "",
           req.headers.authorization || ""
         );
