@@ -12,6 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 1005;
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:1001";
 const CMS_PROFILE_URL = process.env.CMS_PROFILE_URL || "https://cms.ezwealth.in/api/auth-client/profile";
+const CMS_UPDATE_PROFILE_URL = process.env.CMS_UPDATE_PROFILE_URL || "http://192.168.1.22:8000/api/clients/update-client-profile";
 
 // Security & logging middleware
 app.use(helmet());
@@ -77,6 +78,18 @@ function parseBase64Image(input) {
   try {
     const buffer = Buffer.from(payload, "base64");
     if (!buffer.length) return null;
+
+    if (!match) {
+      if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+        mimeType = "image/png";
+      } else if (buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) {
+        mimeType = "image/jpeg";
+      } else if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") {
+        mimeType = "image/webp";
+      }
+      if (!allowed[mimeType]) return null;
+    }
+
     return {
       buffer,
       mimeType,
@@ -85,6 +98,64 @@ function parseBase64Image(input) {
   } catch {
     return null;
   }
+}
+
+function buildBearerToken(rawToken, authorizationHeader) {
+  const token = (rawToken || "").trim();
+  const authHeader = (authorizationHeader || "").trim();
+
+  if (authHeader) return authHeader;
+  if (token) return token.toLowerCase().startsWith("bearer ") ? token : `Bearer ${token}`;
+  return "";
+}
+
+function imageToDataUrl(buffer, mimeType) {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+function getImageInput(req) {
+  const base64Image = req.file ? null : parseBase64Image(req.body.imageBase64);
+  if (!req.file && !base64Image) {
+    return null;
+  }
+
+  const fileBuffer = req.file ? req.file.buffer : base64Image.buffer;
+  const fileName = req.file ? req.file.originalname : base64Image.fileName;
+  const mimeType = req.file ? req.file.mimetype : base64Image.mimeType;
+
+  return {
+    fileBuffer,
+    fileName,
+    mimeType,
+    dataUrl: imageToDataUrl(fileBuffer, mimeType)
+  };
+}
+
+async function updateClientProfileImage(fieldName, imageValue, rawToken, authorizationHeader) {
+  const bearer = buildBearerToken(rawToken, authorizationHeader);
+  if (!bearer) {
+    return {
+      updated: false,
+      skipped: true,
+      message: "Skipped profile update because token was not provided."
+    };
+  }
+
+  const payload = { [fieldName]: imageValue };
+  const { data } = await axios.post(CMS_UPDATE_PROFILE_URL, payload, {
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: bearer
+    },
+    timeout: 15000
+  });
+
+  return {
+    updated: true,
+    skipped: false,
+    message: `${fieldName} saved successfully.`,
+    data
+  };
 }
 
 function extractClientProfile(payload) {
@@ -271,14 +342,10 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
   try {
     const { tolerance = "0.5", imageBase64, token, sessionToken } = req.body;
 
-    const base64Image = req.file ? null : parseBase64Image(imageBase64);
-    if (!req.file && !base64Image) {
+    const imageInput = getImageInput(req);
+    if (!imageInput) {
       return res.status(400).json({ error: "Provide either 'image' (file) or valid 'imageBase64'." });
     }
-
-    const fileBuffer = req.file ? req.file.buffer : base64Image.buffer;
-    const fileName = req.file ? req.file.originalname : base64Image.fileName;
-    const mimeType = req.file ? req.file.mimetype : base64Image.mimeType;
 
     const profile = await fetchProfileByToken(token || sessionToken || "", req.headers.authorization || "");
     const clientId = extractClientId(profile);
@@ -294,14 +361,34 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
         tolerance,
         referenceImageBase64: aadhaarImageBase64
       },
-      fileBuffer,
-      fileName,
-      mimeType
+      imageInput.fileBuffer,
+      imageInput.fileName,
+      imageInput.mimeType
     );
 
     result.client_id = clientId;
     if (result.match) {
       result.matched_image_base64 = aadhaarImageBase64;
+      try {
+        const profileUpdate = await updateClientProfileImage(
+          "selfieEkyc",
+          imageInput.dataUrl,
+          token || sessionToken || "",
+          req.headers.authorization || ""
+        );
+        result.profile_updated = profileUpdate.updated;
+        result.profile_update_message = profileUpdate.message;
+      } catch (saveError) {
+        console.error("[PROFILE_UPDATE] Failed to save selfieEkyc.", {
+          status: saveError.response?.status || "internal",
+          message: saveError.message
+        });
+        result.profile_updated = false;
+        result.profile_update_message = "Face matched but selfieEkyc save failed.";
+        result.profile_update_error = saveError.response?.data || saveError.message;
+      }
+    } else {
+      result.profile_updated = false;
     }
 
     return res.status(200).json(result);
@@ -361,24 +448,44 @@ app.delete("/api/labels/:label", async (req, res, next) => {
  */
 app.post("/api/validate-signature", upload.single("image"), async (req, res, next) => {
   try {
-    const { imageBase64 } = req.body;
-    const base64Image = req.file ? null : parseBase64Image(imageBase64);
-    
-    if (!req.file && !base64Image) {
+    const { token, sessionToken } = req.body;
+    const imageInput = getImageInput(req);
+
+    if (!imageInput) {
       return res.status(400).json({ error: "Provide either 'image' (file) or valid 'imageBase64'." });
     }
-
-    const fileBuffer = req.file ? req.file.buffer : base64Image.buffer;
-    const fileName = req.file ? req.file.originalname : base64Image.fileName;
-    const mimeType = req.file ? req.file.mimetype : base64Image.mimeType;
 
     const result = await forwardToPython(
       "/validate-signature",
       {},
-      fileBuffer,
-      fileName,
-      mimeType
+      imageInput.fileBuffer,
+      imageInput.fileName,
+      imageInput.mimeType
     );
+
+    if (result.valid) {
+      try {
+        const profileUpdate = await updateClientProfileImage(
+          "wetSignature",
+          imageInput.dataUrl,
+          token || sessionToken || "",
+          req.headers.authorization || ""
+        );
+        result.profile_updated = profileUpdate.updated;
+        result.profile_update_message = profileUpdate.message;
+      } catch (saveError) {
+        console.error("[PROFILE_UPDATE] Failed to save wetSignature.", {
+          status: saveError.response?.status || "internal",
+          message: saveError.message
+        });
+        result.profile_updated = false;
+        result.profile_update_message = "Signature validated but wetSignature save failed.";
+        result.profile_update_error = saveError.response?.data || saveError.message;
+      }
+    } else {
+      result.profile_updated = false;
+    }
+
     res.status(200).json(result);
   } catch (err) {
     if (err.response) {

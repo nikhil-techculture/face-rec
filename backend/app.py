@@ -3,13 +3,15 @@ import uuid
 import base64
 import binascii
 import aiofiles
+from io import BytesIO
 from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, Tuple
+from PIL import Image, UnidentifiedImageError
 
 from face_engine import (
     register_face,
@@ -29,6 +31,46 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 10))
 
+
+def detect_image_extension(raw: bytes, fallback: str = ".jpg") -> str:
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return ".webp"
+    return fallback
+
+
+def normalize_image_bytes(raw: bytes, ext_hint: str) -> Tuple[bytes, str]:
+    ext = (ext_hint or detect_image_extension(raw)).lower()
+    if ext == ".jpeg":
+        ext = ".jpg"
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type '{ext}'. Use JPG, PNG, or WEBP.")
+
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            has_alpha = "A" in image.getbands() or (image.mode == "P" and "transparency" in image.info)
+            if has_alpha:
+                rgba = image.convert("RGBA")
+                white_bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                white_bg.alpha_composite(rgba)
+                output = BytesIO()
+                white_bg.convert("RGB").save(output, format="PNG")
+                return output.getvalue(), ".png"
+
+            if image.mode not in ("RGB", "L"):
+                converted = image.convert("RGB")
+                output = BytesIO()
+                save_format = "PNG" if ext == ".png" else "WEBP" if ext == ".webp" else "JPEG"
+                converted.save(output, format=save_format)
+                return output.getvalue(), ext
+    except UnidentifiedImageError:
+        pass
+
+    return raw, ext
+
 app = FastAPI(
     title="Face Recognition API",
     description="Register reference faces and match uploaded images against them.",
@@ -46,15 +88,14 @@ app.add_middleware(
 
 async def save_upload(file: UploadFile) -> Path:
     ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type '{ext}'. Use JPG, PNG, or WEBP.")
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB allowed.")
 
-    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    normalized_content, normalized_ext = normalize_image_bytes(content, ext)
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{normalized_ext}"
     async with aiofiles.open(dest, "wb") as f:
-        content = await file.read()
-        if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB allowed.")
-        await f.write(content)
+        await f.write(normalized_content)
     return dest
 
 
@@ -73,9 +114,6 @@ async def save_base64_upload(image_base64: str) -> Path:
     }
     ext = ext_by_mime.get(mime, ".jpg")
 
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Unsupported base64 image type. Use JPG, PNG, or WEBP.")
-
     try:
         raw = base64.b64decode(payload, validate=True)
     except (binascii.Error, ValueError):
@@ -84,9 +122,11 @@ async def save_base64_upload(image_base64: str) -> Path:
     if len(raw) > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB allowed.")
 
-    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    normalized_content, normalized_ext = normalize_image_bytes(raw, detect_image_extension(raw, ext))
+
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{normalized_ext}"
     async with aiofiles.open(dest, "wb") as f:
-        await f.write(raw)
+        await f.write(normalized_content)
     return dest
 
 

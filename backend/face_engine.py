@@ -194,12 +194,20 @@ def validate_signature(image_path: str) -> dict:
     Returns validation result with confidence score (0-100).
     """
     try:
-        img = cv2.imread(image_path)
+        img = cv2.imread(image_path, cv2.IMREAD_COLOR)
         if img is None:
             return {
                 "valid": False,
                 "confidence": 0.0,
                 "message": "Could not read image file."
+            }
+
+        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if face_recognition.face_locations(rgb_img, model="hog"):
+            return {
+                "valid": False,
+                "confidence": 5.0,
+                "message": "Human face/photo detected. Upload only signature on plain white background."
             }
 
         h, w = img.shape[:2]

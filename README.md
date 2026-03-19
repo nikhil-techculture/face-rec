@@ -118,6 +118,9 @@ Flow:
 - Gateway calls `https://cms.ezwealth.in/api/auth-client/profile` with token.
 - Reads Aadhaar image from `digioDetails.actions[].details.aadhaar.image`.
 - Matches uploaded image against Aadhaar image.
+- On successful match, saves the uploaded selfie to client profile as `selfieEkyc` using the same bearer token.
+
+Transparent PNG/WEBP images are accepted in both multipart and base64 input. They are normalized internally for processing.
 
 **Response (match):**
 ```json
@@ -151,6 +154,8 @@ Automatically rejects:
 - Random curly/scribble lines (invalid)
 - Empty or minimal signatures
 
+If the signature is valid and an Authorization header or token is provided, the gateway saves it to client profile as `wetSignature`.
+
 ```
 POST /api/validate-signature
 Content-Type: multipart/form-data OR application/json
@@ -158,6 +163,7 @@ Content-Type: multipart/form-data OR application/json
 Fields:
   image       (file)    — signature image to validate
   imageBase64 (string)  — optional alternative: signature as base64 data URL or raw base64
+  token       (string)  — optional if Authorization header is used for saving `wetSignature`
 ```
 
 **Response (valid signature):**
@@ -285,6 +291,8 @@ curl -X DELETE http://localhost:1005/api/labels/user_123
 | PORT              | 1005                       | Node.js gateway port         |
 | PYTHON_API_URL    | http://localhost:1001      | Python backend URL           |
 | ALLOWED_ORIGINS   | *                          | Comma-separated CORS origins |
+| CMS_PROFILE_URL   | https://cms.ezwealth.in/api/auth-client/profile | CMS profile lookup URL |
+| CMS_UPDATE_PROFILE_URL | http://192.168.1.22:8000/api/clients/update-client-profile | Saves `selfieEkyc` and `wetSignature` on successful validation |
 
 ---
 
