@@ -138,6 +138,11 @@ async def save_image_input(image: Optional[UploadFile], image_base64: Optional[s
     raise HTTPException(status_code=400, detail="Provide either 'image' file or 'imageBase64'.")
 
 
+def file_to_base64(path: Path) -> str:
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("ascii")
+
+
 @app.get("/", tags=["Health"])
 def root():
     return {"status": "ok", "service": "Face Recognition API", "version": "1.0.0"}
@@ -262,6 +267,7 @@ async def validate_signature_endpoint(
     path = await save_image_input(image, imageBase64)
     try:
         result = validate_signature(str(path))
+        result["normalized_base64"] = file_to_base64(path)
     finally:
         path.unlink(missing_ok=True)
 

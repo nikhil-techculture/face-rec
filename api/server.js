@@ -465,9 +465,10 @@ app.post("/api/validate-signature", upload.single("image"), async (req, res, nex
 
     if (result.valid) {
       try {
+        const signatureBase64ForSave = result.normalized_base64 || imageInput.base64;
         const profileUpdate = await updateClientProfileImage(
           "wetSignature",
-          imageInput.base64,
+          signatureBase64ForSave,
           token || sessionToken || "",
           req.headers.authorization || ""
         );
