@@ -37,6 +37,20 @@ const upload = multer({
   }
 });
 
+// Multer for document+face uploads — accepts images AND PDFs
+const uploadWithDoc = multer({
+  storage: memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedImages = ["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"];
+    const allowedDocs = ["application/pdf"];
+    if ([...allowedImages, ...allowedDocs].includes(file.mimetype)) {
+      return cb(null, true);
+    }
+    cb(new Error(`Unsupported file type '${file.mimetype}'. Use JPG, PNG, WEBP, BMP, TIFF, or PDF.`));
+  }
+});
+
 
 async function forwardToPython(endpoint, fields, fileBuffer, fileName, mimeType) {
   const form = new FormData();
@@ -50,6 +64,23 @@ async function forwardToPython(endpoint, fields, fileBuffer, fileName, mimeType)
   const response = await axios.post(`${PYTHON_API}${endpoint}`, form, {
     headers: form.getHeaders(),
     timeout: 10050
+  });
+  return response.data;
+}
+
+async function forwardMultiFileToPython(endpoint, fields, files) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, String(value));
+  }
+  for (const { fieldName, buffer, fileName, mimeType } of files) {
+    if (buffer) {
+      form.append(fieldName, buffer, { filename: fileName, contentType: mimeType });
+    }
+  }
+  const response = await axios.post(`${PYTHON_API}${endpoint}`, form, {
+    headers: form.getHeaders(),
+    timeout: 30000
   });
   return response.data;
 }
@@ -525,6 +556,36 @@ app.get("/api/images/:label", async (req, res, next) => {
     next(err);
   }
 });
+
+
+/**
+ * POST /api/verify-document
+ * Check if username appears in a bank statement document.
+ * Body (multipart/form-data):
+ *   - username:  string  (full name to search in document)
+ *   - document:  file    (bank statement PDF or image)
+ */
+app.post(
+  "/api/verify-document",
+  uploadWithDoc.single("document"),
+  async (req, res, next) => {
+    try {
+      const { username } = req.body;
+      if (!username) return res.status(400).json({ error: "Field 'username' is required." });
+      if (!req.file)  return res.status(400).json({ error: "Field 'document' (file) is required." });
+
+      const result = await forwardMultiFileToPython(
+        "/verify-document",
+        { username },
+        [{ fieldName: "document", buffer: req.file.buffer, fileName: req.file.originalname, mimeType: req.file.mimetype }]
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      if (err.response) return res.status(err.response.status).json(err.response.data);
+      next(err);
+    }
+  }
+);
 
 
 app.use(errorHandler);

@@ -22,6 +22,7 @@ from face_engine import (
     get_reference_image_path,
     validate_signature,
 )
+from doc_parser import extract_text, name_found_in_document
 
 load_dotenv()
 
@@ -29,6 +30,7 @@ UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_DOC_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 10))
 
 
@@ -248,6 +250,57 @@ def get_reference_image(label: str):
     if path is None:
         raise HTTPException(status_code=404, detail=f"Reference image not found for label '{label}'.")
     return FileResponse(path)
+
+
+async def save_document(file: UploadFile) -> Path:
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_DOC_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported document type '{ext}'. Use PDF, JPG, PNG, WEBP, BMP, or TIFF."
+        )
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"Document too large. Max {MAX_FILE_SIZE_MB}MB allowed.")
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    async with aiofiles.open(dest, "wb") as f:
+        await f.write(content)
+    return dest
+
+
+@app.post("/verify-document", tags=["Document Verification"])
+async def verify_document_endpoint(
+    username: str = Form(..., description="Full name to search inside the document"),
+    document: UploadFile = File(..., description="Bank statement PDF or image (JPG/PNG/WEBP/BMP/TIFF)")
+):
+    """
+    ## Verify name in a document (bank statement)
+
+    Extracts text from the uploaded document and checks if `username` appears in it.
+
+    - **PDF** — text extracted directly (no OCR needed)
+    - **Image** — OCR via Tesseract (must be installed for image docs)
+
+    **Response:**
+    - `verified` — true if name found in document
+    - `matched_text` — the part of the name that was matched
+    - `doc_type` — `pdf` or `image`
+    """
+    doc_path = await save_document(document)
+    try:
+        doc_text, doc_type = extract_text(str(doc_path))
+        name_result = name_found_in_document(username, doc_text)
+    finally:
+        doc_path.unlink(missing_ok=True)
+
+    return JSONResponse(status_code=200, content={
+        "verified": name_result["found"],
+        "username": username,
+        "matched_text": name_result.get("matched_text"),
+        "match_type": name_result.get("match_type"),
+        "doc_type": doc_type,
+        "message": name_result["message"]
+    })
 
 
 @app.post("/validate-signature", tags=["Signature Validation"])

@@ -54,8 +54,13 @@
 						},
 						"url": {
 							"raw": "{{base_url}}/api/match-client",
-							"host": ["{{base_url}}"],
-							"path": ["api", "match-client"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"match-client"
+							]
 						},
 						"description": "Single API match flow. Gateway fetches Aadhaar image from CMS using token and compares with uploaded selfie."
 					},
@@ -105,8 +110,13 @@
 						},
 						"url": {
 							"raw": "{{base_url}}/api/match-client",
-							"host": ["{{base_url}}"],
-							"path": ["api", "match-client"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"match-client"
+							]
 						},
 						"description": "JSON variant for direct match using `imageBase64`."
 					},
@@ -140,8 +150,13 @@
 						},
 						"url": {
 							"raw": "{{base_url}}/api/validate-signature",
-							"host": ["{{base_url}}"],
-							"path": ["api", "validate-signature"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"validate-signature"
+							]
 						},
 						"description": "Checks if uploaded sign is a proper signature and rejects simple lines/scribbles. When valid, saves it to client profile as wetSignature using the bearer token."
 					},
@@ -197,12 +212,167 @@
 						},
 						"url": {
 							"raw": "{{base_url}}/api/validate-signature",
-							"host": ["{{base_url}}"],
-							"path": ["api", "validate-signature"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"validate-signature"
+							]
 						},
 						"description": "JSON variant for signature validation using `imageBase64`."
 					},
 					"response": []
+				}
+			]
+		},
+		{
+			"name": "Document Verification",
+			"item": [
+				{
+					"name": "Verify Bank Statement (Name Check)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "username",
+									"value": "Rahul Sharma",
+									"description": "Full name to search inside the document. Matches case-insensitively. e.g. 'Rahul Sharma' or 'rahul_sharma'",
+									"type": "text"
+								},
+								{
+									"key": "document",
+									"description": "Bank statement PDF or image (JPG/PNG/WEBP/BMP/TIFF). PDF recommended \u00e2\u20ac\u201d no OCR needed.",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/verify-document",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"verify-document"
+							]
+						},
+						"description": "## Bank Statement Name Verification\n\nPass a `username` and a bank statement `document`.\nThe API extracts text from the document and checks if the name is present.\n\n### What is handled automatically:\n- **Salutations stripped** \u00e2\u20ac\u201d Mr. / Mrs. / Miss / Dr. / Shri / Smt etc. are ignored in both username and document\n- **Payment lines ignored** \u00e2\u20ac\u201d NEFT/RTGS/UPI/IMPS/transaction rows are skipped entirely\n- **Joint account rejected** \u00e2\u20ac\u201d if name only appears in joint-holder line, it is rejected\n- **Case insensitive** \u00e2\u20ac\u201d matching is always lowercase\n\n### match_type values:\n| Value | Meaning |\n|---|---|\n| `full_name` | Exact full name found in a single line |\n| `all_words_in_line` | All name words found in same line |\n| `all_words_scattered` | All words found but across different lines |\n| `partial` | Only some words found |\n| `rejected_only` | Name only in joint/payment lines \u00e2\u20ac\u201d rejected |\n| `no_match` | Name not found anywhere |\n\n---\n\n**Name found (with salutation):**\n```json\n{\n  \"verified\": true,\n  \"username\": \"Mr. Rahul Sharma\",\n  \"matched_text\": \"rahul sharma\",\n  \"match_type\": \"full_name\",\n  \"doc_type\": \"pdf\",\n  \"rejected_lines_count\": 7,\n  \"message\": \"Full name 'rahul sharma' found in document.\"\n}\n```\n\n**Joint holder rejected:**\n```json\n{\n  \"verified\": false,\n  \"username\": \"Mrs. Priya Mehta\",\n  \"matched_text\": null,\n  \"match_type\": \"rejected_only\",\n  \"doc_type\": \"pdf\",\n  \"rejected_lines_count\": 7,\n  \"message\": \"Name 'priya mehta' only found in joint-account or payment lines. Not accepted as primary holder.\"\n}\n```\n\n**Name in payment line rejected:**\n```json\n{\n  \"verified\": false,\n  \"username\": \"Rahul Kumar\",\n  \"matched_text\": null,\n  \"match_type\": \"rejected_only\",\n  \"doc_type\": \"pdf\",\n  \"rejected_lines_count\": 7,\n  \"message\": \"Name 'rahul kumar' only found in joint-account or payment lines. Not accepted as primary holder.\"\n}\n```"
+					},
+					"response": [
+						{
+							"name": "Verified \u00e2\u20ac\u201d Mr. Rahul Sharma (salutation stripped)",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{
+											"key": "username",
+											"value": "Mr. Rahul Sharma",
+											"type": "text"
+										},
+										{
+											"key": "document",
+											"type": "file",
+											"src": []
+										}
+									]
+								},
+								"url": {
+									"raw": "{{base_url}}/api/verify-document"
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"verified\": true,\n  \"username\": \"Mr. Rahul Sharma\",\n  \"matched_text\": \"rahul sharma\",\n  \"match_type\": \"full_name\",\n  \"doc_type\": \"pdf\",\n  \"message\": \"Full name 'rahul sharma' found in document.\"\n}"
+						},
+						{
+							"name": "Rejected \u00e2\u20ac\u201d Joint holder (Mrs. Priya Mehta)",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{
+											"key": "username",
+											"value": "Mrs. Priya Mehta",
+											"type": "text"
+										},
+										{
+											"key": "document",
+											"type": "file",
+											"src": []
+										}
+									]
+								},
+								"url": {
+									"raw": "{{base_url}}/api/verify-document"
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"verified\": false,\n  \"username\": \"Mrs. Priya Mehta\",\n  \"matched_text\": null,\n  \"match_type\": \"rejected_only\",\n  \"doc_type\": \"pdf\",\n  \"message\": \"Name 'priya mehta' only found in joint-account or payment lines. Not accepted as primary holder.\"\n}"
+						},
+						{
+							"name": "Rejected \u00e2\u20ac\u201d Name only in payment/transaction line",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{
+											"key": "username",
+											"value": "Rahul Kumar",
+											"type": "text"
+										},
+										{
+											"key": "document",
+											"type": "file",
+											"src": []
+										}
+									]
+								},
+								"url": {
+									"raw": "{{base_url}}/api/verify-document"
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"verified\": false,\n  \"username\": \"Rahul Kumar\",\n  \"matched_text\": null,\n  \"match_type\": \"rejected_only\",\n  \"doc_type\": \"pdf\",\n  \"message\": \"Name 'rahul kumar' only found in joint-account or payment lines. Not accepted as primary holder.\"\n}"
+						},
+						{
+							"name": "Not found \u00e2\u20ac\u201d Wrong name",
+							"originalRequest": {
+								"method": "POST",
+								"body": {
+									"mode": "formdata",
+									"formdata": [
+										{
+											"key": "username",
+											"value": "Wrong Person",
+											"type": "text"
+										},
+										{
+											"key": "document",
+											"type": "file",
+											"src": []
+										}
+									]
+								},
+								"url": {
+									"raw": "{{base_url}}/api/verify-document"
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"verified\": false,\n  \"username\": \"Wrong Person\",\n  \"matched_text\": null,\n  \"match_type\": \"no_match\",\n  \"doc_type\": \"pdf\",\n  \"message\": \"Name 'wrong person' not found in document.\"\n}"
+						}
+					]
 				}
 			]
 		}
