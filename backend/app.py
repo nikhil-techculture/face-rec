@@ -172,7 +172,10 @@ async def setup_face(
         path.unlink(missing_ok=True)
 
     if not result["success"]:
-        raise HTTPException(status_code=422, detail=result["message"])
+        raise HTTPException(status_code=422, detail={
+            "error_code": result.get("error_code", "UNKNOWN"),
+            "message": result["message"]
+        })
 
     return JSONResponse(status_code=201, content=result)
 
@@ -197,7 +200,7 @@ async def match_face_endpoint(
     finally:
         path.unlink(missing_ok=True)
 
-    if result.get("match") and result.get("matched_image_url"):
+    if result.get("matched_image_url"):
         result["matched_image_url"] = f"/api{result['matched_image_url']}"
 
     return JSONResponse(status_code=200, content=result)

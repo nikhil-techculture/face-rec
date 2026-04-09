@@ -35,6 +35,129 @@ def _record_from_value(value):
     return {"encoding": value, "reference_image": None}
 
 
+def validate_face_image(image_path: str) -> dict:
+    """
+    Validate a face image before encoding/matching.
+
+    Checks (in order):
+    1. Image readable
+    2. At least one face detected
+    3. Exactly one face (reject if multiple)
+    4. Face is large enough (not too far / tiny)
+    5. Image is not too blurry
+    6. Face occupies reasonable portion of image (not just a tiny speck)
+
+    Returns:
+        { "valid": bool, "error_code": str|None, "message": str, "face_count": int }
+    """
+    try:
+        img_bgr = cv2.imread(image_path)
+        if img_bgr is None:
+            return {"valid": False, "error_code": "UNREADABLE", "face_count": 0,
+                    "message": "Image could not be read. Ensure it is a valid JPG/PNG/WEBP file."}
+
+        h, w = img_bgr.shape[:2]
+        image_area = h * w
+
+        # ── Blur check (Laplacian variance) ──────────────────────────────────
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        if blur_score < 30.0:
+            return {"valid": False, "error_code": "TOO_BLURRY", "face_count": 0,
+                    "message": f"Image is too blurry (score: {blur_score:.1f}). Use a clearer, well-lit photo."}
+
+        # ── Face detection ────────────────────────────────────────────────────
+        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        face_locations = face_recognition.face_locations(rgb, model="hog")
+        face_count = len(face_locations)
+
+        if face_count == 0:
+            return {"valid": False, "error_code": "NO_FACE", "face_count": 0,
+                    "message": "No face detected in the image. Ensure the face is clearly visible and well-lit."}
+
+        if face_count > 1:
+            return {"valid": False, "error_code": "MULTIPLE_FACES", "face_count": face_count,
+                    "message": f"{face_count} faces detected. Upload a photo with only one person."}
+
+        # ── Face size check ───────────────────────────────────────────────────
+        top, right, bottom, left = face_locations[0]
+        face_h = bottom - top
+        face_w = right - left
+        face_area = face_h * face_w
+        face_ratio = face_area / max(1, image_area)
+
+        if face_ratio < 0.015:
+            return {"valid": False, "error_code": "FACE_TOO_SMALL", "face_count": 1,
+                    "message": "Face is too small or too far from the camera. Move closer and retake the photo."}
+
+        if face_ratio > 0.95:
+            return {"valid": False, "error_code": "FACE_TOO_CLOSE", "face_count": 1,
+                    "message": "Face is too close to the camera. Move back slightly and retake the photo."}
+
+        # ── Background check — detect cluttered / non-plain background ────────
+        # Strategy: mask out the face region, analyze the remaining background.
+        # A plain background has low color variance and low edge density.
+        bg_mask = np.ones((h, w), dtype=bool)
+        # Expand face bounding box by 20% as buffer
+        pad_y = int(face_h * 0.2)
+        pad_x = int(face_w * 0.2)
+        y1 = max(0, top - pad_y)
+        y2 = min(h, bottom + pad_y)
+        x1 = max(0, left - pad_x)
+        x2 = min(w, right + pad_x)
+        bg_mask[y1:y2, x1:x2] = False  # exclude face area
+
+        bg_pixels_rgb = img_bgr[:, :, ::-1][bg_mask]  # BGR→RGB, apply mask
+
+        if len(bg_pixels_rgb) < 100:
+            # Image is almost entirely face — that's fine
+            return {"valid": True, "error_code": None, "face_count": 1, "message": "Face image is valid."}
+
+        # Color variance of background (high = colorful/cluttered)
+        bg_std = float(np.std(bg_pixels_rgb.astype(np.float32)))
+
+        # Edge density of background (high = lots of objects/lines)
+        bg_gray = gray.copy()
+        bg_gray[~bg_mask] = 0
+        edges = cv2.Canny(bg_gray, threshold1=50, threshold2=150)
+        bg_edge_pixels = int(np.count_nonzero(edges[bg_mask]))
+        bg_pixel_count = int(np.count_nonzero(bg_mask))
+        edge_density = bg_edge_pixels / max(1, bg_pixel_count)
+
+        # Saturation of background (high = colorful objects present)
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        bg_sat = hsv[:, :, 1][bg_mask]
+        sat_mean = float(np.mean(bg_sat))
+
+        # Scoring system — at least 2 of 3 signals must fire to reject.
+        # Thresholds tuned so plain/neutral backgrounds pass and
+        # clearly cluttered backgrounds (objects, walls, furniture) fail.
+        #
+        # bg_std > 58      → high color variance in background
+        # edge_density > 0.10 → dense edges (shelves, objects, text)
+        # sat_mean > 120   → highly saturated/colorful background
+        score = (
+            (1 if bg_std > 58 else 0) +
+            (1 if edge_density > 0.10 else 0) +
+            (1 if sat_mean > 120 else 0)
+        )
+        cluttered = score >= 2
+
+        if cluttered:
+            return {
+                "valid": False,
+                "error_code": "CLUTTERED_BACKGROUND",
+                "face_count": 1,
+                "message": "Background is not plain. Remove objects behind you and use a plain/neutral background."
+            }
+
+        return {"valid": True, "error_code": None, "face_count": 1, "message": "Face image is valid."}
+
+    except Exception as e:
+        return {"valid": False, "error_code": "PROCESSING_ERROR", "face_count": 0,
+                "message": f"Error processing image: {str(e)}"}
+
+
 def encode_image(image_path: str) -> Optional[list]:
     """Load image, detect face, return 128-d encoding or None if no face found."""
     image = face_recognition.load_image_file(image_path)
@@ -46,9 +169,13 @@ def encode_image(image_path: str) -> Optional[list]:
 
 def register_face(label: str, image_path: str) -> dict:
     """Register a reference face under a given label."""
+    validation = validate_face_image(image_path)
+    if not validation["valid"]:
+        return {"success": False, "error_code": validation["error_code"], "message": validation["message"]}
+
     encoding = encode_image(image_path)
     if encoding is None:
-        return {"success": False, "message": "No face detected in the setup image."}
+        return {"success": False, "error_code": "ENCODING_FAILED", "message": "Face detected but encoding failed. Try a clearer photo."}
 
     data = _load_encodings()
     REFERENCE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,13 +207,15 @@ def match_face(image_path: str, label: str, tolerance: float = 0.5) -> dict:
             "message": f"No registered face found for label '{label}'. Please setup first."
         }
 
+    validation = validate_face_image(image_path)
+    if not validation["valid"]:
+        return {"match": False, "confidence": 0.0,
+                "error_code": validation["error_code"], "message": validation["message"]}
+
     unknown_encoding = encode_image(image_path)
     if unknown_encoding is None:
-        return {
-            "match": False,
-            "confidence": 0.0,
-            "message": "No face detected in the uploaded image."
-        }
+        return {"match": False, "confidence": 0.0,
+                "error_code": "ENCODING_FAILED", "message": "Face detected but encoding failed. Try a clearer photo."}
 
     record = _record_from_value(data[label])
     known_encoding = np.array(record["encoding"])
@@ -114,21 +243,27 @@ def match_two_faces(reference_image_path: str, image_path: str, tolerance: float
     Compare a probe image against a reference image directly.
     Returns match result with confidence score.
     """
+    ref_validation = validate_face_image(reference_image_path)
+    if not ref_validation["valid"]:
+        return {"match": False, "confidence": 0.0,
+                "error_code": ref_validation["error_code"],
+                "message": f"Reference image invalid: {ref_validation['message']}"}
+
+    probe_validation = validate_face_image(image_path)
+    if not probe_validation["valid"]:
+        return {"match": False, "confidence": 0.0,
+                "error_code": probe_validation["error_code"],
+                "message": f"Uploaded image invalid: {probe_validation['message']}"}
+
     reference_encoding = encode_image(reference_image_path)
     if reference_encoding is None:
-        return {
-            "match": False,
-            "confidence": 0.0,
-            "message": "No face detected in the reference image."
-        }
+        return {"match": False, "confidence": 0.0,
+                "error_code": "ENCODING_FAILED", "message": "Reference face detected but encoding failed."}
 
     unknown_encoding = encode_image(image_path)
     if unknown_encoding is None:
-        return {
-            "match": False,
-            "confidence": 0.0,
-            "message": "No face detected in the uploaded image."
-        }
+        return {"match": False, "confidence": 0.0,
+                "error_code": "ENCODING_FAILED", "message": "Uploaded face detected but encoding failed."}
 
     reference_np = np.array(reference_encoding)
     unknown_np = np.array(unknown_encoding)
