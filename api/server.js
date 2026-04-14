@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 1005;
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:1001";
 const CMS_PROFILE_URL = process.env.CMS_PROFILE_URL || "https://cms.ezwealth.in/api/auth-client/profile";
 const CMS_UPDATE_PROFILE_URL = process.env.CMS_UPDATE_PROFILE_URL || "http://192.168.1.22:8000/api/clients/update-client-profile";
+const CMS_BANK_STATEMENT_URL = process.env.CMS_BANK_STATEMENT_URL || "https://cms.ezwealth.in/api/auth-client/bank-statement-pdf";
 
 // Security & logging middleware
 app.use(helmet());
@@ -140,7 +141,7 @@ function buildBearerToken(rawToken, authorizationHeader) {
   return "";
 }
 
-function imageToBase64(buffer) {
+function bufferToBase64(buffer) {
   return buffer.toString("base64");
 }
 
@@ -158,7 +159,38 @@ function getImageInput(req) {
     fileBuffer,
     fileName,
     mimeType,
-    base64: imageToBase64(fileBuffer)
+    base64: bufferToBase64(fileBuffer)
+  };
+}
+
+async function submitCmsFormData(url, fields, rawToken, authorizationHeader) {
+  const bearer = buildBearerToken(rawToken, authorizationHeader);
+  if (!bearer) {
+    return {
+      updated: false,
+      skipped: true,
+      message: "Skipped CMS save because token was not provided."
+    };
+  }
+
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, String(value));
+  }
+
+  const { data } = await axios.post(url, form, {
+    headers: {
+      ...form.getHeaders(),
+      Authorization: bearer
+    },
+    timeout: 20000
+  });
+
+  return {
+    updated: true,
+    skipped: false,
+    message: data?.message || "CMS save completed successfully.",
+    data
   };
 }
 
@@ -187,6 +219,15 @@ async function updateClientProfileImage(fieldName, imageValue, rawToken, authori
     message: `${fieldName} saved successfully.`,
     data
   };
+}
+
+async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader) {
+  return submitCmsFormData(
+    CMS_BANK_STATEMENT_URL,
+    { pdfBase64 },
+    rawToken,
+    authorizationHeader
+  );
 }
 
 function extractClientProfile(payload) {
@@ -570,7 +611,7 @@ app.post(
   uploadWithDoc.single("document"),
   async (req, res, next) => {
     try {
-      const { username } = req.body;
+      const { username, token, sessionToken } = req.body;
       if (!username) return res.status(400).json({ error: "Field 'username' is required." });
       if (!req.file)  return res.status(400).json({ error: "Field 'document' (file) is required." });
 
@@ -578,7 +619,33 @@ app.post(
         "/verify-document",
         { username },
         [{ fieldName: "document", buffer: req.file.buffer, fileName: req.file.originalname, mimeType: req.file.mimetype }]
-      );
+      );        `23`
+
+      if (result.verified) {
+        try {
+          const bankStatementSave = await saveBankStatementPdf(
+            bufferToBase64(req.file.buffer),
+            token || sessionToken || "",
+            req.headers.authorization || ""
+          );
+          result.bank_statement_saved = bankStatementSave.updated;
+          result.bank_statement_save_message = bankStatementSave.message;
+          if (bankStatementSave.data) {
+            result.bank_statement = bankStatementSave.data;
+          }
+        } catch (saveError) {
+          console.error("[PROFILE_UPDATE] Failed to save bank statement PDF.", {
+            status: saveError.response?.status || "internal",
+            message: saveError.message
+          });
+          result.bank_statement_saved = false;
+          result.bank_statement_save_message = "Document verified but bank statement save failed.";
+          result.bank_statement_save_error = saveError.response?.data || saveError.message;
+        }
+      } else {
+        result.bank_statement_saved = false;
+      }
+
       res.status(200).json(result);
     } catch (err) {
       if (err.response) return res.status(err.response.status).json(err.response.data);
