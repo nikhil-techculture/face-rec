@@ -163,7 +163,7 @@ function getImageInput(req) {
   };
 }
 
-async function submitCmsFormData(url, fields, rawToken, authorizationHeader) {
+async function submitCmsJson(url, payload, rawToken, authorizationHeader) {
   const bearer = buildBearerToken(rawToken, authorizationHeader);
   if (!bearer) {
     return {
@@ -173,14 +173,9 @@ async function submitCmsFormData(url, fields, rawToken, authorizationHeader) {
     };
   }
 
-  const form = new FormData();
-  for (const [key, value] of Object.entries(fields)) {
-    form.append(key, String(value));
-  }
-
-  const { data } = await axios.post(url, form, {
+  const { data } = await axios.post(url, payload, {
     headers: {
-      ...form.getHeaders(),
+      "Content-Type": "application/json",
       Authorization: bearer
     },
     timeout: 20000
@@ -222,7 +217,7 @@ async function updateClientProfileImage(fieldName, imageValue, rawToken, authori
 }
 
 async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader) {
-  return submitCmsFormData(
+  return submitCmsJson(
     CMS_BANK_STATEMENT_URL,
     { pdfBase64 },
     rawToken,
@@ -619,7 +614,7 @@ app.post(
         "/verify-document",
         { username },
         [{ fieldName: "document", buffer: req.file.buffer, fileName: req.file.originalname, mimeType: req.file.mimetype }]
-      );        `23`
+      );
 
       if (result.verified) {
         try {
