@@ -11,7 +11,7 @@ const errorHandler = require("./middleware/errorHandler");
 const app = express();
 const PORT = process.env.PORT || 1005;
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:1001";
-const CMS_PROFILE_URL = process.env.CMS_PROFILE_URL || "https://cms.ezwealth.in/api/auth-client/profile";
+const CMS_DIGIO_SELFIE_URL = process.env.CMS_DIGIO_SELFIE_URL || "https://cms.ezwealth.in/api/auth-client/digio-selfie";
 const CMS_UPDATE_PROFILE_URL = process.env.CMS_UPDATE_PROFILE_URL || "http://192.168.1.22:8000/api/clients/update-client-profile";
 const CMS_BANK_STATEMENT_URL = process.env.CMS_BANK_STATEMENT_URL || "https://cms.ezwealth.in/api/auth-client/bank-statement-pdf";
 
@@ -225,26 +225,16 @@ async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader) {
   );
 }
 
-function extractClientProfile(payload) {
+function extractDigioSelfieImage(payload) {
   if (!payload || typeof payload !== "object") return null;
-  if (payload.digioDetails) return payload;
-  if (payload.data && typeof payload.data === "object") {
-    if (payload.data.digioDetails) return payload.data;
-    if (payload.data.profile && payload.data.profile.digioDetails) return payload.data.profile;
-    if (Array.isArray(payload.data.items)) {
-      const match = payload.data.items.find((item) => item && item.digioDetails);
-      if (match) return match;
-    }
-  }
-  return null;
-}
 
-function extractAadhaarImage(profile) {
-  const actions = profile?.digioDetails?.actions;
-  if (!Array.isArray(actions)) return null;
+  const candidates = [
+    payload?.selfie,
+    payload?.data?.selfie,
+    payload?.data?.data?.selfie
+  ];
 
-  for (const action of actions) {
-    const image = action?.details?.aadhaar?.image;
+  for (const image of candidates) {
     if (typeof image === "string" && image.trim()) {
       return image.trim();
     }
@@ -252,40 +242,26 @@ function extractAadhaarImage(profile) {
   return null;
 }
 
-function extractClientId(profile) {
-  if (!profile || typeof profile !== "object") return null;
-  if (typeof profile.clientId === "string" && profile.clientId.trim()) return profile.clientId;
-  if (profile._id && typeof profile._id === "object" && typeof profile._id.$oid === "string") return profile._id.$oid;
-  if (typeof profile._id === "string" && profile._id.trim()) return profile._id;
-  if (typeof profile.id === "string" && profile.id.trim()) return profile.id;
-  if (typeof profile.mobileNo === "string" && profile.mobileNo.trim()) return profile.mobileNo;
-  return null;
-}
-
-async function fetchProfileByToken(rawToken, authorizationHeader) {
-  const token = (rawToken || "").trim();
-  const bearer = authorizationHeader && authorizationHeader.trim()
-    ? authorizationHeader.trim()
-    : (token ? `Bearer ${token}` : "");
-
-  if (!bearer) {
-    console.error("[CMS_PROFILE] Missing token for profile fetch.");
-    throw new Error("Missing token. Provide Authorization header or token field.");
+async function fetchDigioSelfieByToken(authorizationHeader) {
+  const authHeader = (authorizationHeader || "").trim();
+  if (!authHeader) {
+    console.error("[CMS_DIGIO_SELFIE] Missing Authorization header for selfie fetch.");
+    throw new Error("Missing Authorization header.");
   }
 
   try {
-    const { data } = await axios.get(CMS_PROFILE_URL, {
-      headers: { Authorization: bearer },
+    const { data } = await axios.get(CMS_DIGIO_SELFIE_URL, {
+      // Token is forwarded exactly as received in request header.
+      headers: { Authorization: authHeader },
       timeout: 12000
     });
 
-
-    const profile = extractClientProfile(data.data);
-    if (!profile) {
-      console.error("[CMS_PROFILE] Profile extraction failed. Unexpected response shape from CMS.");
-      throw new Error("Unable to extract profile from CMS response.");
+    const selfieBase64 = extractDigioSelfieImage(data);
+    if (!selfieBase64) {
+      console.error("[CMS_DIGIO_SELFIE] Selfie extraction failed. Unexpected response shape from CMS.");
+      throw new Error("Unable to extract selfie image from CMS response.");
     }
-    return profile;
+    return selfieBase64;
   } catch (err) {
     const status = err.response?.status;
     const body = err.response?.data;
@@ -298,8 +274,8 @@ async function fetchProfileByToken(rawToken, authorizationHeader) {
       bodyPreview = "<unserializable-response-body>";
     }
 
-    console.error("[CMS_PROFILE] Failed to fetch profile.", {
-      url: CMS_PROFILE_URL,
+    console.error("[CMS_DIGIO_SELFIE] Failed to fetch selfie.", {
+      url: CMS_DIGIO_SELFIE_URL,
       status: status || "no-response",
       message: err.message,
       bodyPreview
@@ -401,9 +377,9 @@ app.post("/api/match", upload.single("image"), async (req, res, next) => {
 /**
  * POST /api/match-client
  * Single-image match flow:
- * 1) Pull reference Aadhaar image from CMS profile using token
+ * 1) Pull reference selfie image from digio-selfie API using Authorization header as-is
  * 2) Match uploaded image against pulled reference image
- * 3) Return match result + client_id + matched image base64 (on success)
+ * 3) Return match result + matched image base64 (on success)
  */
 app.post("/api/match-client", upload.single("image"), async (req, res, next) => {
   try {
@@ -414,28 +390,25 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
       return res.status(400).json({ error: "Provide either 'image' (file) or valid 'imageBase64'." });
     }
 
-    const profile = await fetchProfileByToken(token || sessionToken || "", req.headers.authorization || "");
-    const clientId = extractClientId(profile);
-    const aadhaarImageBase64 = extractAadhaarImage(profile);
+    const digioSelfieBase64 = await fetchDigioSelfieByToken(req.headers.authorization || "");
 
-    if (!aadhaarImageBase64) {
-      return res.status(422).json({ error: "Aadhaar image not found in CMS profile." });
+    if (!digioSelfieBase64) {
+      return res.status(422).json({ error: "Selfie image not found in digio-selfie API response." });
     }
 
     const result = await forwardToPython(
       "/match-direct",
       {
         tolerance,
-        referenceImageBase64: aadhaarImageBase64
+        referenceImageBase64: digioSelfieBase64
       },
       imageInput.fileBuffer,
       imageInput.fileName,
       imageInput.mimeType
     );
 
-    result.client_id = clientId;
     if (result.match) {
-      result.matched_image_base64 = aadhaarImageBase64;
+      result.matched_image_base64 = digioSelfieBase64;
       try {
         const profileUpdate = await updateClientProfileImage(
           "selfieEkyc",
@@ -467,7 +440,7 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
     if (err.response) {
       return res.status(err.response.status).json(err.response.data);
     }
-    if (err.message && err.message.toLowerCase().includes("missing token")) {
+    if (err.message && err.message.toLowerCase().includes("missing authorization header")) {
       return res.status(401).json({ error: err.message });
     }
     next(err);
