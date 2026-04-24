@@ -12,7 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 1005;
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:1001";
 const CMS_DIGIO_SELFIE_URL = process.env.CMS_DIGIO_SELFIE_URL || "https://cms.ezwealth.in/api/auth-client/digio-selfie";
-const CMS_UPDATE_PROFILE_URL = process.env.CMS_UPDATE_PROFILE_URL || "http://192.168.1.22:8000/api/clients/update-client-profile";
+const CMS_UPDATE_PROFILE_URL = process.env.CMS_UPDATE_PROFILE_URL || "https://cms.ezwealth.in/api/clients/update-client-profile";
 const CMS_BANK_STATEMENT_URL = process.env.CMS_BANK_STATEMENT_URL || "https://cms.ezwealth.in/api/auth-client/bank-statement-pdf";
 
 // Security & logging middleware
@@ -145,6 +145,13 @@ function bufferToBase64(buffer) {
   return buffer.toString("base64");
 }
 
+function toImageDataUrl(base64Value, mimeType = "image/jpeg") {
+  const value = (base64Value || "").trim();
+  if (!value) return "";
+  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value)) return value;
+  return `data:${mimeType};base64,${value}`;
+}
+
 function getImageInput(req) {
   const base64Image = req.file ? null : parseBase64Image(req.body.imageBase64);
   if (!req.file && !base64Image) {
@@ -214,6 +221,24 @@ async function updateClientProfileImage(fieldName, imageValue, rawToken, authori
     message: `${fieldName} saved successfully.`,
     data
   };
+}
+
+async function updateClientProfileImageWithFallback(fieldName, imageInput, rawToken, authorizationHeader) {
+  const dataUrlValue = toImageDataUrl(imageInput.base64, imageInput.mimeType || "image/jpeg");
+  const rawBase64Value = imageInput.base64;
+
+  try {
+    return await updateClientProfileImage(fieldName, dataUrlValue, rawToken, authorizationHeader);
+  } catch (firstError) {
+    if (!rawBase64Value || rawBase64Value === dataUrlValue) {
+      throw firstError;
+    }
+    try {
+      return await updateClientProfileImage(fieldName, rawBase64Value, rawToken, authorizationHeader);
+    } catch {
+      throw firstError;
+    }
+  }
 }
 
 async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader) {
@@ -410,9 +435,9 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
     if (result.match) {
       result.matched_image_base64 = digioSelfieBase64;
       try {
-        const profileUpdate = await updateClientProfileImage(
+        const profileUpdate = await updateClientProfileImageWithFallback(
           "selfieEkyc",
-          imageInput.base64,
+          imageInput,
           token || sessionToken || "",
           req.headers.authorization || ""
         );
