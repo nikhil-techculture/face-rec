@@ -145,10 +145,15 @@ function bufferToBase64(buffer) {
   return buffer.toString("base64");
 }
 
-function toImageDataUrl(base64Value, mimeType = "image/jpeg") {
-  const value = (base64Value || "").trim();
+function stripDataUriPrefix(base64Value = "") {
+  const value = String(base64Value || "").trim();
   if (!value) return "";
-  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value)) return value;
+  return value.replace(/^data:[^;]+;base64,/i, "").trim();
+}
+
+function toImageDataUrl(base64Value, mimeType = "image/jpeg") {
+  const value = stripDataUriPrefix(base64Value);
+  if (!value) return "";
   return `data:${mimeType};base64,${value}`;
 }
 
@@ -224,17 +229,19 @@ async function updateClientProfileImage(fieldName, imageValue, rawToken, authori
 }
 
 async function updateClientProfileImageWithFallback(fieldName, imageInput, rawToken, authorizationHeader) {
-  const dataUrlValue = toImageDataUrl(imageInput.base64, imageInput.mimeType || "image/jpeg");
-  const rawBase64Value = imageInput.base64;
+  const rawBase64Value = stripDataUriPrefix(imageInput.base64);
+  const dataUrlValue = toImageDataUrl(rawBase64Value, imageInput.mimeType || "image/jpeg");
 
   try {
-    return await updateClientProfileImage(fieldName, dataUrlValue, rawToken, authorizationHeader);
+    // Prefer raw base64 (without data URI prefix) for CMS persistence.
+    return await updateClientProfileImage(fieldName, rawBase64Value, rawToken, authorizationHeader);
   } catch (firstError) {
-    if (!rawBase64Value || rawBase64Value === dataUrlValue) {
+    if (!dataUrlValue) {
       throw firstError;
     }
     try {
-      return await updateClientProfileImage(fieldName, rawBase64Value, rawToken, authorizationHeader);
+      // Fallback for CMS variants that expect a full data URL.
+      return await updateClientProfileImage(fieldName, dataUrlValue, rawToken, authorizationHeader);
     } catch {
       throw firstError;
     }
