@@ -106,6 +106,8 @@ Fields:
   image       (file)    — client selfie image to verify (or use imageBase64)
   imageBase64 (string)  — optional alternative to image file
   tolerance   (number)  — optional, default 0.5
+  latitude    (string)  — optional, forwarded as-is to CMS on successful match
+  longitude   (string)  — optional, forwarded as-is to CMS on successful match
   token       (string)  — optional if Authorization header is used
 ```
 
@@ -115,22 +117,36 @@ Authorization: Bearer <sessionToken>
 ```
 
 Flow:
-- Gateway calls `https://cms.ezwealth.in/api/auth-client/profile` with token.
-- Reads Aadhaar image from `digioDetails.actions[].details.aadhaar.image`.
-- Matches uploaded image against Aadhaar image.
-- On successful match, saves the uploaded selfie to client profile as `selfieEkyc` using the same bearer token.
+- Gateway fetches Digio reference selfie from CMS using Authorization header.
+- Matches uploaded image against reference selfie.
+- On successful match, saves to CMS `update-client-profile` with `selfieEkyc` (raw base64) plus `latitude` / `longitude` if provided.
 
 Transparent PNG/WEBP images are accepted in both multipart and base64 input. They are normalized internally for processing.
 
-**Response (match):**
+**CMS save payload (on match):**
+```json
+{
+  "selfieEkyc": "<raw base64 without data:image/jpeg;base64, prefix>",
+  "latitude": "28.6139",
+  "longitude": "77.2090"
+}
+```
+
+**Response (match + saved):**
 ```json
 {
   "match": true,
   "confidence": 90.12,
   "distance": 0.0988,
-  "client_id": "69afe3b420902d7b7ee7c424",
-  "matched_image_base64": "<base64-from-cms>",
-  "message": "Face matched successfully."
+  "matched_image_base64": "<base64-from-digio>",
+  "message": "Face matched successfully.",
+  "profile_updated": true,
+  "profile_update_message": "selfieEkyc saved successfully.",
+  "cms_save_payload": {
+    "selfieEkyc": "<base64, 245000 characters>",
+    "latitude": "28.6139",
+    "longitude": "77.2090"
+  }
 }
 ```
 

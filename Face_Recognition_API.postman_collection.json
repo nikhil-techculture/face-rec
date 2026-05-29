@@ -20,6 +20,16 @@
 			"key": "image_base64",
 			"value": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
 			"type": "string"
+		},
+		{
+			"key": "latitude",
+			"value": "28.6139",
+			"type": "string"
+		},
+		{
+			"key": "longitude",
+			"value": "77.2090",
+			"type": "string"
 		}
 	],
 	"item": [
@@ -49,6 +59,18 @@
 									"key": "tolerance",
 									"value": "0.5",
 									"type": "text"
+								},
+								{
+									"key": "latitude",
+									"value": "{{latitude}}",
+									"description": "Device latitude — forwarded as-is to CMS on successful match",
+									"type": "text"
+								},
+								{
+									"key": "longitude",
+									"value": "{{longitude}}",
+									"description": "Device longitude — forwarded as-is to CMS on successful match",
+									"type": "text"
 								}
 							]
 						},
@@ -62,7 +84,7 @@
 								"match-client"
 							]
 						},
-						"description": "Single API match flow. Gateway fetches Aadhaar image from CMS using token and compares with uploaded selfie."
+						"description": "Single API match flow.\n\n1. Gateway fetches Digio reference selfie from CMS\n2. Compares with uploaded `image`\n3. On match, saves to CMS `update-client-profile` with:\n   - `selfieEkyc` (raw base64, no data: prefix)\n   - `latitude` / `longitude` (if sent in form-data)\n\n**form-data fields:** image, tolerance, latitude, longitude"
 					},
 					"response": [
 						{
@@ -81,7 +103,7 @@
 							},
 							"status": "OK",
 							"code": 200,
-							"body": "{\n  \"match\": true,\n  \"confidence\": 90.12,\n  \"distance\": 0.0988,\n  \"client_id\": \"69afe3b420902d7b7ee7c424\",\n  \"matched_image_base64\": \"<base64-from-cms>\",\n  \"message\": \"Face matched successfully.\"\n}"
+							"body": "{\n  \"match\": true,\n  \"confidence\": 90.12,\n  \"distance\": 0.0988,\n  \"matched_image_base64\": \"<base64-from-digio>\",\n  \"message\": \"Face matched successfully.\",\n  \"profile_updated\": true,\n  \"profile_update_message\": \"selfieEkyc saved successfully.\",\n  \"cms_save_payload\": {\n    \"selfieEkyc\": \"<base64, 245000 characters>\",\n    \"latitude\": \"28.6139\",\n    \"longitude\": \"77.2090\"\n  }\n}"
 						}
 					]
 				},
@@ -101,7 +123,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"imageBase64\": \"{{image_base64}}\",\n  \"tolerance\": 0.5\n}",
+							"raw": "{\n  \"imageBase64\": \"{{image_base64}}\",\n  \"tolerance\": 0.5,\n  \"latitude\": \"{{latitude}}\",\n  \"longitude\": \"{{longitude}}\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -118,7 +140,7 @@
 								"match-client"
 							]
 						},
-						"description": "JSON variant for direct match using `imageBase64`."
+						"description": "JSON variant for direct match using `imageBase64`. Optional `latitude` and `longitude` are forwarded to CMS on successful match."
 					},
 					"response": []
 				}

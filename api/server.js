@@ -151,6 +151,25 @@ function stripDataUriPrefix(base64Value = "") {
   return value.replace(/^data:[^;]+;base64,/i, "").trim();
 }
 
+function extractLocationFromBody(body = {}) {
+  const location = {};
+  if (body.latitude !== undefined && body.latitude !== null && String(body.latitude).trim() !== "") {
+    location.latitude = body.latitude;
+  }
+  if (body.longitude !== undefined && body.longitude !== null && String(body.longitude).trim() !== "") {
+    location.longitude = body.longitude;
+  }
+  return location;
+}
+
+function summarizeCmsSavePayload(fieldName, imageValue, extraFields = {}) {
+  const base64 = stripDataUriPrefix(imageValue);
+  return {
+    [fieldName]: base64 ? `<base64, ${base64.length} characters>` : null,
+    ...extraFields
+  };
+}
+
 function toImageDataUrl(base64Value, mimeType = "image/jpeg") {
   const value = stripDataUriPrefix(base64Value);
   if (!value) return "";
@@ -201,7 +220,7 @@ async function submitCmsJson(url, payload, rawToken, authorizationHeader) {
   };
 }
 
-async function updateClientProfileImage(fieldName, imageValue, rawToken, authorizationHeader) {
+async function updateClientProfileImage(fieldName, imageValue, rawToken, authorizationHeader, extraFields = {}) {
   const bearer = buildBearerToken(rawToken, authorizationHeader);
   if (!bearer) {
     return {
@@ -211,7 +230,7 @@ async function updateClientProfileImage(fieldName, imageValue, rawToken, authori
     };
   }
 
-  const payload = { [fieldName]: imageValue };
+  const payload = { [fieldName]: imageValue, ...extraFields };
   const { data } = await axios.post(CMS_UPDATE_PROFILE_URL, payload, {
     headers: {
       "Content-Type": "application/json",
@@ -224,24 +243,25 @@ async function updateClientProfileImage(fieldName, imageValue, rawToken, authori
     updated: true,
     skipped: false,
     message: `${fieldName} saved successfully.`,
-    data
+    data,
+    payload
   };
 }
 
-async function updateClientProfileImageWithFallback(fieldName, imageInput, rawToken, authorizationHeader) {
+async function updateClientProfileImageWithFallback(fieldName, imageInput, rawToken, authorizationHeader, extraFields = {}) {
   const rawBase64Value = stripDataUriPrefix(imageInput.base64);
   const dataUrlValue = toImageDataUrl(rawBase64Value, imageInput.mimeType || "image/jpeg");
 
   try {
     // Prefer raw base64 (without data URI prefix) for CMS persistence.
-    return await updateClientProfileImage(fieldName, rawBase64Value, rawToken, authorizationHeader);
+    return await updateClientProfileImage(fieldName, rawBase64Value, rawToken, authorizationHeader, extraFields);
   } catch (firstError) {
     if (!dataUrlValue) {
       throw firstError;
     }
     try {
       // Fallback for CMS variants that expect a full data URL.
-      return await updateClientProfileImage(fieldName, dataUrlValue, rawToken, authorizationHeader);
+      return await updateClientProfileImage(fieldName, dataUrlValue, rawToken, authorizationHeader, extraFields);
     } catch {
       throw firstError;
     }
@@ -411,11 +431,13 @@ app.post("/api/match", upload.single("image"), async (req, res, next) => {
  * Single-image match flow:
  * 1) Pull reference selfie image from digio-selfie API using Authorization header as-is
  * 2) Match uploaded image against pulled reference image
- * 3) Return match result + matched image base64 (on success)
+ * 3) On match, save selfieEkyc (+ latitude/longitude if sent) to CMS update-profile API
+ * 4) Return match result + matched image base64 (on success)
  */
 app.post("/api/match-client", upload.single("image"), async (req, res, next) => {
   try {
     const { tolerance = "0.5", imageBase64, token, sessionToken } = req.body;
+    const locationFields = extractLocationFromBody(req.body);
 
     const imageInput = getImageInput(req);
     if (!imageInput) {
@@ -446,10 +468,16 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
           "selfieEkyc",
           imageInput,
           token || sessionToken || "",
-          req.headers.authorization || ""
+          req.headers.authorization || "",
+          locationFields
         );
         result.profile_updated = profileUpdate.updated;
         result.profile_update_message = profileUpdate.message;
+        result.cms_save_payload = summarizeCmsSavePayload(
+          "selfieEkyc",
+          stripDataUriPrefix(imageInput.base64),
+          locationFields
+        );
       } catch (saveError) {
         console.error("[PROFILE_UPDATE] Failed to save selfieEkyc.", {
           status: saveError.response?.status || "internal",
