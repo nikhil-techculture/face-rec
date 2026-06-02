@@ -5,10 +5,24 @@ import shutil
 import cv2
 from pathlib import Path
 from typing import Optional
+from insightface.app import FaceAnalysis
+
+# ── InsightFace global model initialization ──────────────────────────────────
+face_app = FaceAnalysis(providers=["CPUExecutionProvider"])
+face_app.prepare(ctx_id=0, det_size=(640, 640))
 
 MODELS_DIR = Path(__file__).parent / "models"
 ENCODINGS_FILE = MODELS_DIR / "encodings.pkl"
 REFERENCE_IMAGES_DIR = MODELS_DIR / "reference_images"
+
+
+def get_faces(image_path: str):
+    """Read image and detect all faces using InsightFace RetinaFace."""
+    image = cv2.imread(image_path)
+    if image is None:
+        raise Exception("Unable to read image")
+    faces = face_app.get(image)
+    return image, faces
 
 
 def _load_encodings() -> dict:
@@ -34,9 +48,43 @@ def _record_from_value(value):
     return {"encoding": value, "reference_image": None}
 
 
+def validate_face_pose(face) -> bool:
+    """
+    Validate that the face is looking roughly straight at the camera.
+    Uses InsightFace keypoints (left_eye, right_eye, nose, mouth_left, mouth_right).
+    Returns True if pose is acceptable for KYC.
+    """
+    landmarks = face.kps  # shape (5, 2)
+
+    left_eye = landmarks[0]
+    right_eye = landmarks[1]
+    nose = landmarks[2]
+
+    eye_center_x = (left_eye[0] + right_eye[0]) / 2
+    horizontal_offset = abs(nose[0] - eye_center_x)
+    eye_distance = abs(right_eye[0] - left_eye[0])
+
+    if eye_distance < 1:
+        return False
+
+    yaw_ratio = horizontal_offset / eye_distance
+    return yaw_ratio < 0.18
+
+
+def check_liveness(image_path: str) -> dict:
+    """
+    Liveness check stub. Will be replaced with MiniFASNet later.
+    Currently always returns live=True.
+    """
+    return {
+        "live": True,
+        "score": 1.0
+    }
+
+
 def validate_face_image(image_path: str) -> dict:
     """
-    Validate a face image before encoding/matching.
+    Validate a face image before encoding/matching using InsightFace.
 
     Rules:
     1. Image must be readable
@@ -44,6 +92,7 @@ def validate_face_image(image_path: str) -> dict:
     3. Exactly one face must be visible anywhere in the image
     4. The detected face should not be too small or too close
     5. Image should not be too blurry
+    6. Face pose must be roughly frontal (KYC requirement)
 
     Note:
     - Background objects/clutter are allowed
@@ -68,34 +117,14 @@ def validate_face_image(image_path: str) -> dict:
             return {"valid": False, "error_code": "TOO_BLURRY", "face_count": 0,
                     "message": f"Image is too blurry (score: {blur_score:.1f}). Use a clearer, well-lit photo."}
 
-        # ── Face detection ────────────────────────────────────────────────────
-        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        raw_face_locations = face_recognition.face_locations(rgb, number_of_times_to_upsample=1, model="hog")
+        # ── Face detection (InsightFace RetinaFace) ──────────────────────────
+        _, faces = get_faces(image_path)
 
-        if not raw_face_locations:
+        if len(faces) == 0:
             return {"valid": False, "error_code": "NO_FACE", "face_count": 0,
                     "message": "No face detected in the image. Ensure the face is clearly visible and well-lit."}
 
-        # Ignore tiny false-positive detections from background objects/posters,
-        # but stay strict when a second meaningful human face is present.
-        detected_faces = []
-        for top, right, bottom, left in raw_face_locations:
-            face_w = max(0, right - left)
-            face_h = max(0, bottom - top)
-            detected_faces.append({
-                "location": (top, right, bottom, left),
-                "area": face_w * face_h,
-            })
-
-        detected_faces.sort(key=lambda item: item["area"], reverse=True)
-        primary_face = detected_faces[0]
-        primary_face_area = max(1, primary_face["area"])
-
-        significant_faces = [
-            item for item in detected_faces
-            if item["area"] >= max(1600, int(primary_face_area * 0.20))
-        ]
-        face_count = len(significant_faces)
+        face_count = len(faces)
 
         if face_count > 1:
             return {
@@ -106,10 +135,15 @@ def validate_face_image(image_path: str) -> dict:
             }
 
         # ── Face size check ───────────────────────────────────────────────────
-        top, right, bottom, left = primary_face["location"]
-        face_h = bottom - top
-        face_w = right - left
-        face_area = face_h * face_w
+        largest_face = max(
+            faces,
+            key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
+        )
+
+        x1, y1, x2, y2 = largest_face.bbox.astype(int)
+        face_w = x2 - x1
+        face_h = y2 - y1
+        face_area = face_w * face_h
         face_ratio = face_area / max(1, image_area)
 
         if face_ratio < 0.015:
@@ -119,6 +153,11 @@ def validate_face_image(image_path: str) -> dict:
         if face_ratio > 0.95:
             return {"valid": False, "error_code": "FACE_TOO_CLOSE", "face_count": 1,
                     "message": "Face is too close to the camera. Move back slightly and retake the photo."}
+
+        # ── Pose validation (KYC: must look at camera) ───────────────────────
+        if not validate_face_pose(largest_face):
+            return {"valid": False, "error_code": "BAD_POSE", "face_count": 1,
+                    "message": "Please look straight at the camera."}
 
         # Background/plainness is not enforced. Objects are allowed,
         # but there must be only one detectable human face in the frame.
@@ -135,12 +174,26 @@ def validate_face_image(image_path: str) -> dict:
 
 
 def encode_image(image_path: str) -> Optional[list]:
-    """Load image, detect face, return 128-d encoding or None if no face found."""
-    image = face_recognition.load_image_file(image_path)
-    encodings = face_recognition.face_encodings(image)
-    if not encodings:
+    """
+    Generate ArcFace 512-d embedding using InsightFace.
+    Returns list[float] or None if no face found.
+    """
+    try:
+        image, faces = get_faces(image_path)
+
+        if len(faces) == 0:
+            return None
+
+        largest_face = max(
+            faces,
+            key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
+        )
+
+        embedding = largest_face.embedding
+        return embedding.tolist()
+
+    except Exception:
         return None
-    return encodings[0].tolist()
 
 
 def register_face(label: str, image_path: str) -> dict:
@@ -168,11 +221,11 @@ def register_face(label: str, image_path: str) -> dict:
     return {"success": True, "message": f"Face registered successfully for label '{label}'."}
 
 
-def match_face(image_path: str, label: str, tolerance: float = 0.5) -> dict:
+def match_face(image_path: str, label: str, tolerance: float = 0.75) -> dict:
     """
     Compare uploaded image against the stored encoding for a label.
     Returns match result with confidence score.
-    tolerance: lower = stricter (0.4 strict, 0.6 lenient)
+    tolerance: cosine similarity threshold (0.75 default, higher = stricter)
     """
     data = _load_encodings()
 
@@ -182,6 +235,12 @@ def match_face(image_path: str, label: str, tolerance: float = 0.5) -> dict:
             "confidence": 0.0,
             "message": f"No registered face found for label '{label}'. Please setup first."
         }
+
+    # Liveness check
+    liveness = check_liveness(image_path)
+    if not liveness["live"]:
+        return {"match": False, "confidence": 0.0,
+                "error_code": "LIVENESS_FAILED", "message": "Liveness verification failed."}
 
     validation = validate_face_image(image_path)
     if not validation["valid"]:
@@ -197,16 +256,17 @@ def match_face(image_path: str, label: str, tolerance: float = 0.5) -> dict:
     known_encoding = np.array(record["encoding"])
     unknown_np = np.array(unknown_encoding)
 
-    face_distance = face_recognition.face_distance([known_encoding], unknown_np)[0]
-    is_match = bool(face_distance <= tolerance)
+    # Cosine similarity matching (ArcFace embeddings are normalized)
+    similarity = float(np.dot(known_encoding, unknown_np) / (
+        np.linalg.norm(known_encoding) * np.linalg.norm(unknown_np)
+    ))
 
-    # Convert distance to a 0-100 confidence score
-    confidence = round((1 - float(face_distance)) * 100, 2)
+    is_match = similarity >= tolerance
 
     result = {
-        "match": is_match,
-        "confidence": confidence,
-        "distance": round(float(face_distance), 4),
+        "match": bool(is_match),
+        "confidence": round(similarity * 100, 2),
+        "similarity": round(similarity, 4),
         "message": "Face matched successfully." if is_match else "Face does not match."
     }
     if is_match:
@@ -214,10 +274,10 @@ def match_face(image_path: str, label: str, tolerance: float = 0.5) -> dict:
     return result
 
 
-def match_two_faces(reference_image_path: str, image_path: str, tolerance: float = 0.5) -> dict:
+def match_two_faces(reference_image_path: str, image_path: str, tolerance: float = 0.75) -> dict:
     """
     Compare a probe image against a reference image directly.
-    Returns match result with confidence score.
+    Returns match result with confidence score using cosine similarity.
     """
     ref_validation = validate_face_image(reference_image_path)
     if not ref_validation["valid"]:
@@ -241,17 +301,19 @@ def match_two_faces(reference_image_path: str, image_path: str, tolerance: float
         return {"match": False, "confidence": 0.0,
                 "error_code": "ENCODING_FAILED", "message": "Uploaded face detected but encoding failed."}
 
-    reference_np = np.array(reference_encoding)
-    unknown_np = np.array(unknown_encoding)
+    ref = np.array(reference_encoding)
+    probe = np.array(unknown_encoding)
 
-    face_distance = face_recognition.face_distance([reference_np], unknown_np)[0]
-    is_match = bool(face_distance <= tolerance)
-    confidence = round((1 - float(face_distance)) * 100, 2)
+    similarity = float(np.dot(ref, probe) / (
+        np.linalg.norm(ref) * np.linalg.norm(probe)
+    ))
+
+    is_match = similarity >= tolerance
 
     return {
-        "match": is_match,
-        "confidence": confidence,
-        "distance": round(float(face_distance), 4),
+        "match": bool(is_match),
+        "confidence": round(similarity * 100, 2),
+        "similarity": round(similarity, 4),
         "message": "Face matched successfully." if is_match else "Face does not match."
     }
 
@@ -313,6 +375,8 @@ def validate_signature(image_path: str) -> dict:
                 "message": "Could not read image file."
             }
 
+        # Use face_recognition for signature's face-rejection check
+        # (lightweight HOG check to reject photos uploaded as signatures)
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         if face_recognition.face_locations(rgb_img, model="hog"):
             return {
@@ -533,4 +597,3 @@ def validate_signature(image_path: str) -> dict:
             "confidence": 0.0,
             "message": f"Error validating signature: {str(e)}"
         }
-

@@ -64,7 +64,7 @@ async function forwardToPython(endpoint, fields, fileBuffer, fileName, mimeType)
 
   const response = await axios.post(`${PYTHON_API}${endpoint}`, form, {
     headers: form.getHeaders(),
-    timeout: 10050
+    timeout: 100500
   });
   return response.data;
 }
