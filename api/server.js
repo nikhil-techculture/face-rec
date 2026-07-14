@@ -294,6 +294,42 @@ function extractDigioSelfieImage(payload) {
   return null;
 }
 
+function looksLikeHttpUrl(value) {
+  return /^https?:\/\//i.test(String(value || "").trim());
+}
+
+/**
+ * digio-selfie may return raw/data-URI base64 or a Cloudinary (HTTP) URL.
+ * Always normalize to raw base64 before matching.
+ */
+async function normalizeSelfieToBase64(selfieValue) {
+  const value = String(selfieValue || "").trim();
+  if (!value) return null;
+
+  if (looksLikeHttpUrl(value)) {
+    try {
+      const { data } = await axios.get(value, {
+        responseType: "arraybuffer",
+        timeout: 15000
+      });
+      const buffer = Buffer.from(data);
+      if (!buffer.length) {
+        throw new Error("Downloaded selfie image is empty.");
+      }
+      return buffer.toString("base64");
+    } catch (err) {
+      console.error("[CMS_DIGIO_SELFIE] Failed to download selfie URL to base64.", {
+        urlPreview: value.slice(0, 120),
+        status: err.response?.status || "no-response",
+        message: err.message
+      });
+      throw new Error("Unable to download selfie image from Cloudinary URL.");
+    }
+  }
+
+  return stripDataUriPrefix(value) || value;
+}
+
 async function fetchDigioSelfieByToken(authorizationHeader) {
   const authHeader = (authorizationHeader || "").trim();
   if (!authHeader) {
@@ -308,10 +344,15 @@ async function fetchDigioSelfieByToken(authorizationHeader) {
       timeout: 12000
     });
 
-    const selfieBase64 = extractDigioSelfieImage(data);
-    if (!selfieBase64) {
+    const selfieValue = extractDigioSelfieImage(data);
+    if (!selfieValue) {
       console.error("[CMS_DIGIO_SELFIE] Selfie extraction failed. Unexpected response shape from CMS.");
       throw new Error("Unable to extract selfie image from CMS response.");
+    }
+
+    const selfieBase64 = await normalizeSelfieToBase64(selfieValue);
+    if (!selfieBase64) {
+      throw new Error("Unable to normalize selfie image to base64.");
     }
     return selfieBase64;
   } catch (err) {
