@@ -399,10 +399,17 @@ def validate_signature(image_path: str) -> dict:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         cleaned = cv2.morphologyEx(ink_mask, cv2.MORPH_OPEN, kernel, iterations=1)
 
-        # 2. Change background color to pure white (255, 255, 255)
-        white_bg = np.full_like(img, 255)
-        white_bg[cleaned > 0] = img[cleaned > 0]
-        cv2.imwrite(image_path, white_bg)
+        # 2. Change background color to pure white (255, 255, 255) only if background is not already white
+        non_ink_mask = cleaned == 0
+        if np.count_nonzero(non_ink_mask) > 0:
+            bg_white_ratio = float(np.count_nonzero(gray[non_ink_mask] >= 230)) / float(np.count_nonzero(non_ink_mask))
+        else:
+            bg_white_ratio = 1.0
+
+        if bg_white_ratio < 0.85:
+            white_bg = np.full_like(img, 255)
+            white_bg[cleaned > 0] = img[cleaned > 0]
+            cv2.imwrite(image_path, white_bg)
 
         # 3. Analyze ink pixels
         ink_pixels = int(np.count_nonzero(cleaned > 0))
