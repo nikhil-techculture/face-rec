@@ -359,11 +359,11 @@ def get_reference_image_path(label: str) -> Optional[Path]:
 def validate_signature(image_path: str) -> dict:
     """
     Validate if an image contains a proper signature.
-    Filters out:
-    - Simple lines (starting/test lines)
-    - Random curly/scribble lines
-    - Insufficient or empty signatures
-    
+    Checks and verifies:
+    1. Rejects uploaded human photos/faces.
+    2. Signature should not be too simple like a dot or a simple stroke.
+    3. Changes background color to plain white.
+
     Returns validation result with confidence score (0-100).
     """
     try:
@@ -375,8 +375,7 @@ def validate_signature(image_path: str) -> dict:
                 "message": "Could not read image file."
             }
 
-        # Use face_recognition for signature's face-rejection check
-        # (lightweight HOG check to reject photos uploaded as signatures)
+        # Face detection check to reject human photos uploaded as signatures
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         if face_recognition.face_locations(rgb_img, model="hog"):
             return {
@@ -389,207 +388,134 @@ def validate_signature(image_path: str) -> dict:
         image_area = float(max(1, h * w))
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-        # Strict white-background requirement for plan-page signatures.
-        white_mask = gray >= 235
-        white_ratio = float(np.count_nonzero(white_mask)) / image_area
-        if white_ratio < 0.78:
-            return {
-                "valid": False,
-                "confidence": 8.0,
-                "message": "Background must be plain white. Upload a clean white-background signature image.",
-                "metrics": {
-                    "white_ratio": round(white_ratio, 4)
-                }
-            }
+        # 1. Identify ink (dark strokes) vs background
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, binary_otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        dark_mask = (gray < 200).astype(np.uint8) * 255
+        ink_mask = cv2.bitwise_or(binary_otsu, dark_mask)
 
-        # Reject photo-like inputs (skin/background-rich images) before contour scoring.
-        sat_ratio = float(np.count_nonzero(hsv[:, :, 1] > 55)) / image_area
-        if sat_ratio > 0.16:
-            return {
-                "valid": False,
-                "confidence": 10.0,
-                "message": "Image looks like a photo/non-document input. Use black/blue signature on white background.",
-                "metrics": {
-                    "white_ratio": round(white_ratio, 4),
-                    "saturation_ratio": round(sat_ratio, 4)
-                }
-            }
-
-        # Build ink mask: dark pixels likely to be pen strokes.
-        ink_mask = gray < 200
-        ink_ratio = float(np.count_nonzero(ink_mask)) / image_area
-        if ink_ratio < 0.0015:
-            return {
-                "valid": False,
-                "confidence": 10.0,
-                "message": "Signature area too small (empty or too light).",
-                "metrics": {
-                    "white_ratio": round(white_ratio, 4),
-                    "ink_ratio": round(ink_ratio, 4)
-                }
-            }
-
-        if ink_ratio > 0.12:
-            return {
-                "valid": False,
-                "confidence": 12.0,
-                "message": "Too much dark content detected. Image appears non-signature/photo-like.",
-                "metrics": {
-                    "white_ratio": round(white_ratio, 4),
-                    "ink_ratio": round(ink_ratio, 4)
-                }
-            }
-
-        binary = np.zeros_like(gray, dtype=np.uint8)
-        binary[ink_mask] = 255
+        # Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+        cleaned = cv2.morphologyEx(ink_mask, cv2.MORPH_OPEN, kernel, iterations=1)
 
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned, connectivity=8)
-        component_areas = []
-        for i in range(1, num_labels):
-            area = int(stats[i, cv2.CC_STAT_AREA])
-            if area >= 20:
-                component_areas.append(area)
+        # 2. Change background color to pure white (255, 255, 255)
+        white_bg = np.full_like(img, 255)
+        white_bg[cleaned > 0] = img[cleaned > 0]
+        cv2.imwrite(image_path, white_bg)
 
-        if not component_areas:
+        # 3. Analyze ink pixels
+        ink_pixels = int(np.count_nonzero(cleaned > 0))
+        ink_ratio = float(ink_pixels) / image_area
+
+        if ink_pixels < 25 or ink_ratio < 0.0003:
             return {
                 "valid": False,
-                "confidence": 10.0,
-                "message": "No meaningful signature strokes detected.",
+                "confidence": 0.0,
+                "message": "Invalid signature: image is empty or no signature strokes detected.",
                 "metrics": {
-                    "white_ratio": round(white_ratio, 4),
-                    "ink_ratio": round(ink_ratio, 4)
-                }
-            }
-
-        components_count = len(component_areas)
-        if components_count > 60:
-            return {
-                "valid": False,
-                "confidence": 15.0,
-                "message": "Too many disconnected strokes. Signature appears scribbled/noisy.",
-                "metrics": {
-                    "white_ratio": round(white_ratio, 4),
-                    "ink_ratio": round(ink_ratio, 4),
-                    "components": components_count
+                    "ink_pixels": ink_pixels,
+                    "ink_ratio": round(ink_ratio, 5)
                 }
             }
 
         contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = [c for c in contours if cv2.contourArea(c) >= 20]
-        if not contours:
+        valid_contours = [c for c in contours if cv2.contourArea(c) >= 10]
+
+        if not valid_contours:
             return {
                 "valid": False,
-                "confidence": 10.0,
-                "message": "No valid signature contour detected."
+                "confidence": 0.0,
+                "message": "Invalid signature: signature is too simple (looks like a dot or tiny spot).",
+                "metrics": {
+                    "ink_pixels": ink_pixels,
+                    "ink_ratio": round(ink_ratio, 5)
+                }
             }
 
-        main_contour = max(contours, key=cv2.contourArea)
-        contour_area = float(cv2.contourArea(main_contour))
-        area_ratio = contour_area / image_area
-
-        all_points = np.vstack(contours)
+        all_points = np.vstack(valid_contours)
         x, y, bw, bh = cv2.boundingRect(all_points)
         aspect_ratio = float(bw) / float(max(1, bh))
-        bbox_ratio = float(bw * bh) / image_area
+        bbox_area = float(bw * bh)
 
-        if aspect_ratio > 12.0 or aspect_ratio < 0.3:
-            return {
-                "valid": False,
-                "confidence": 15.0,
-                "message": "Signature appears to be a simple line (not a valid signature).",
-                "metrics": {
-                    "aspect_ratio": round(aspect_ratio, 3),
-                    "bbox_ratio": round(bbox_ratio, 4)
-                }
-            }
-
-        if bbox_ratio > 0.55:
-            return {
-                "valid": False,
-                "confidence": 10.0,
-                "message": "Signature occupies too much area. Image appears non-signature/photo-like.",
-                "metrics": {
-                    "bbox_ratio": round(bbox_ratio, 4),
-                    "white_ratio": round(white_ratio, 4)
-                }
-            }
-
-        hull = cv2.convexHull(main_contour)
-        hull_area = float(cv2.contourArea(hull))
-        solidity = contour_area / hull_area if hull_area > 0 else 0.0
-
+        main_contour = max(valid_contours, key=cv2.contourArea)
+        contour_area = float(cv2.contourArea(main_contour))
         arc_length = cv2.arcLength(main_contour, False)
         approx = cv2.approxPolyDP(main_contour, 0.015 * arc_length, False)
         vertices = len(approx)
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned, connectivity=8)
+        components_count = max(0, num_labels - 1)
 
         lines = cv2.HoughLinesP(
             cleaned,
             rho=1,
             theta=np.pi / 180,
-            threshold=70,
-            minLineLength=max(40, int(w * 0.35)),
-            maxLineGap=8,
+            threshold=50,
+            minLineLength=max(30, int(w * 0.25)),
+            maxLineGap=10,
         )
         long_lines = 0 if lines is None else len(lines)
-        if long_lines >= 1 and vertices <= 10 and components_count <= 4:
+
+        # Check if signature is too simple (dot or simple stroke)
+        is_dot = (
+            bw < 18 and bh < 18
+        ) or (
+            bbox_area < 250 and contour_area < 200
+        ) or (
+            ink_pixels < 60
+        )
+
+        is_simple_stroke = (
+            (vertices <= 8 and components_count <= 3)
+            or (long_lines >= 1 and vertices <= 10 and components_count <= 4)
+            or (aspect_ratio > 10.0 and vertices <= 10)
+            or (aspect_ratio < 0.15 and vertices <= 10)
+        )
+
+        if is_dot:
             return {
                 "valid": False,
-                "confidence": 15.0,
-                "message": "Signature appears to be a starting/test line, not a proper signature.",
+                "confidence": 10.0,
+                "message": "Invalid signature: signature is too simple (looks like a dot or tiny spot).",
                 "metrics": {
-                    "long_lines": long_lines,
+                    "bounding_box": [bw, bh],
+                    "ink_pixels": ink_pixels,
                     "vertices": vertices,
                     "components": components_count
                 }
             }
 
-        is_valid = (
-            white_ratio >= 0.78
-            and sat_ratio <= 0.16
-            and 0.0015 <= ink_ratio <= 0.12
-            and 0.30 <= aspect_ratio <= 12.0
-            and bbox_ratio <= 0.55
-            and solidity >= 0.18
-            and vertices >= 10
-            and components_count <= 60
-            and area_ratio >= 0.0008
-        )
+        if is_simple_stroke:
+            return {
+                "valid": False,
+                "confidence": 15.0,
+                "message": "Invalid signature: signature is too simple (looks like a simple stroke or line).",
+                "metrics": {
+                    "aspect_ratio": round(aspect_ratio, 3),
+                    "vertices": vertices,
+                    "long_lines": long_lines,
+                    "components": components_count
+                }
+            }
 
-        complexity_score = min(100.0, (vertices * 2.0) + (components_count * 0.9) + (solidity * 30.0))
+        complexity_score = min(100.0, max(50.0, (vertices * 2.5) + (components_count * 1.2)))
         confidence = round(complexity_score, 2)
 
-        result = {
-            "valid": bool(is_valid),
-            "confidence": confidence if is_valid else min(confidence, 50.0),
-            "message": "Valid signature detected." if is_valid else "Invalid signature: signature pattern is not acceptable.",
+        return {
+            "valid": True,
+            "confidence": confidence,
+            "message": "Valid signature detected.",
             "metrics": {
-                "white_ratio": round(white_ratio, 4),
-                "saturation_ratio": round(sat_ratio, 4),
-                "ink_ratio": round(ink_ratio, 4),
-                "solidity": round(solidity, 4),
+                "ink_pixels": ink_pixels,
+                "ink_ratio": round(ink_ratio, 5),
                 "vertices": int(vertices),
                 "components": int(components_count),
                 "aspect_ratio": round(aspect_ratio, 3),
-                "bbox_ratio": round(bbox_ratio, 4),
-                "area_ratio": round(area_ratio, 5)
+                "bounding_box": [int(bw), int(bh)],
+                "background": "white"
             }
         }
-
-        if not is_valid:
-            if white_ratio < 0.78:
-                result["message"] = "Invalid signature: background is not plain white."
-            elif sat_ratio > 0.16:
-                result["message"] = "Invalid signature: image looks like photo/non-document input."
-            elif vertices < 10:
-                result["message"] = "Invalid signature: too simple or line-like strokes."
-            elif solidity < 0.18:
-                result["message"] = "Invalid signature: random/fragmented scribbles detected."
-
-        return result
 
     except Exception as e:
         return {
