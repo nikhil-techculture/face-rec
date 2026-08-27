@@ -6,6 +6,7 @@ import cv2
 from pathlib import Path
 from typing import Optional
 from insightface.app import FaceAnalysis
+import onnxruntime as ort
 
 # ── InsightFace global model initialization ──────────────────────────────────
 face_app = FaceAnalysis(providers=["CPUExecutionProvider"])
@@ -14,6 +15,14 @@ face_app.prepare(ctx_id=0, det_size=(640, 640))
 MODELS_DIR = Path(__file__).parent / "models"
 ENCODINGS_FILE = MODELS_DIR / "encodings.pkl"
 REFERENCE_IMAGES_DIR = MODELS_DIR / "reference_images"
+
+# ── Liveness Model global initialization ─────────────────────────────────────
+LIVENESS_MODEL_PATH = MODELS_DIR / "anti_spoof_models" / "MiniFASNetV2.onnx"
+try:
+    liveness_session = ort.InferenceSession(str(LIVENESS_MODEL_PATH), providers=['CPUExecutionProvider'])
+except Exception as e:
+    print(f"Warning: Could not load liveness model: {e}")
+    liveness_session = None
 
 
 def get_faces(image_path: str):
@@ -71,15 +80,73 @@ def validate_face_pose(face) -> bool:
     return yaw_ratio < 0.18
 
 
+def get_crop_box(bbox, w, h, scale=2.7):
+    """Calculate crop box with a scale factor for liveness detection"""
+    x1, y1, x2, y2 = bbox
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    bw, bh = x2 - x1, y2 - y1
+    size = int(max(bw, bh) * scale)
+    nx1 = max(0, int(cx - size / 2))
+    ny1 = max(0, int(cy - size / 2))
+    nx2 = min(w, int(cx - size / 2))
+    ny2 = min(h, int(cy - size / 2))
+    return nx1, ny1, nx2, ny2
+
 def check_liveness(image_path: str) -> dict:
     """
-    Liveness check stub. Will be replaced with MiniFASNet later.
-    Currently always returns live=True.
+    Passive Liveness detection using MiniFASNet ONNX.
+    Returns whether the face is real (3D) or a spoof (2D photo/screen).
     """
-    return {
-        "live": True,
-        "score": 1.0
-    }
+    if liveness_session is None:
+        return {"live": True, "score": 1.0}
+
+    try:
+        img_bgr = cv2.imread(image_path)
+        if img_bgr is None:
+             return {"live": False, "score": 0.0, "message": "Could not read image for liveness."}
+             
+        h, w = img_bgr.shape[:2]
+        
+        _, faces = get_faces(image_path)
+        if not faces:
+             return {"live": False, "score": 0.0, "message": "No face detected for liveness."}
+             
+        largest_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        
+        x1, y1, x2, y2 = get_crop_box(largest_face.bbox, w, h, scale=2.7)
+        face_crop = img_bgr[y1:y2, x1:x2]
+        
+        if face_crop.size == 0:
+             return {"live": False, "score": 0.0, "message": "Invalid face crop."}
+             
+        # Preprocess for MiniFASNet (80x80)
+        resized = cv2.resize(face_crop, (80, 80))
+        # Convert to RGB, scale to [0,1], CHW format
+        img_np = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        
+        input_data = np.transpose(img_np, (2, 0, 1))
+        input_data = np.expand_dims(input_data, axis=0)
+        
+        input_name = liveness_session.get_inputs()[0].name
+        out = liveness_session.run(None, {input_name: input_data})[0]
+        
+        # Softmax
+        out_exp = np.exp(out[0] - np.max(out[0]))
+        probs = out_exp / np.sum(out_exp)
+        
+        # For MiniFASNet, class 1 is typically real face. Class 0 & 2 are spoofs.
+        score = float(probs[1]) if len(probs) == 3 else float(probs[0])
+        live = score > 0.8
+
+        return {
+            "live": bool(live),
+            "score": round(score, 4),
+            "message": "Liveness check passed" if live else "Liveness check failed (spoof detected)"
+        }
+        
+    except Exception as e:
+        print(f"Liveness check error: {e}")
+        return {"live": False, "score": 0.0, "message": str(e)}
 
 
 def validate_face_image(image_path: str) -> dict:
@@ -474,10 +541,10 @@ def validate_signature(image_path: str) -> dict:
         )
 
         is_simple_stroke = (
-            (vertices <= 8 and components_count <= 3)
-            or (long_lines >= 1 and vertices <= 10 and components_count <= 4)
-            or (aspect_ratio > 10.0 and vertices <= 10)
-            or (aspect_ratio < 0.15 and vertices <= 10)
+            (vertices <= 8 and components_count <= 10)
+            or (long_lines >= 1 and vertices <= 10 and components_count <= 10)
+            or (aspect_ratio > 8.0 and vertices <= 8)
+            or (aspect_ratio < 0.2 and vertices <= 8)
         )
 
         if is_dot:
