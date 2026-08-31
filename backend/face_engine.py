@@ -121,8 +121,8 @@ def check_liveness(image_path: str) -> dict:
              
         # Preprocess for MiniFASNet (80x80)
         resized = cv2.resize(face_crop, (80, 80))
-        # Convert to RGB, scale to [0,1], CHW format
-        img_np = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        # Keep BGR, do not scale to [0,1], CHW format
+        img_np = resized.astype(np.float32)
         
         input_data = np.transpose(img_np, (2, 0, 1))
         input_data = np.expand_dims(input_data, axis=0)
