@@ -88,8 +88,8 @@ def get_crop_box(bbox, w, h, scale=2.7):
     size = int(max(bw, bh) * scale)
     nx1 = max(0, int(cx - size / 2))
     ny1 = max(0, int(cy - size / 2))
-    nx2 = min(w, int(cx - size / 2))
-    ny2 = min(h, int(cy - size / 2))
+    nx2 = min(w, int(cx + size / 2))
+    ny2 = min(h, int(cy + size / 2))
     return nx1, ny1, nx2, ny2
 
 def check_liveness(image_path: str) -> dict:
@@ -226,6 +226,12 @@ def validate_face_image(image_path: str) -> dict:
             return {"valid": False, "error_code": "BAD_POSE", "face_count": 1,
                     "message": "Please look straight at the camera."}
 
+        # ── Liveness check (Spoof detection) ──────────────────────────────────
+        liveness = check_liveness(image_path)
+        if not liveness.get("live", True):
+            return {"valid": False, "error_code": "LIVENESS_FAILED", "face_count": 1,
+                    "message": "Liveness verification failed (spoof/photo detected)."}
+
         # Background/plainness is not enforced. Objects are allowed,
         # but there must be only one detectable human face in the frame.
         return {
@@ -302,12 +308,6 @@ def match_face(image_path: str, label: str, tolerance: float = 0.75) -> dict:
             "confidence": 0.0,
             "message": f"No registered face found for label '{label}'. Please setup first."
         }
-
-    # Liveness check
-    liveness = check_liveness(image_path)
-    if not liveness["live"]:
-        return {"match": False, "confidence": 0.0,
-                "error_code": "LIVENESS_FAILED", "message": "Liveness verification failed."}
 
     validation = validate_face_image(image_path)
     if not validation["valid"]:
