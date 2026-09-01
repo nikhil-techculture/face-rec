@@ -89,8 +89,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 async def save_upload(file: UploadFile) -> Path:
     ext = Path(file.filename).suffix.lower()
     content = await file.read()
