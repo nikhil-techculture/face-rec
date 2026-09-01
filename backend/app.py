@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from typing import Optional, Tuple
 from PIL import Image, UnidentifiedImageError
@@ -21,6 +22,7 @@ from face_engine import (
     delete_label,
     get_reference_image_path,
     validate_signature,
+    process_liveness_frame,
 )
 from doc_parser import extract_text, name_found_in_document
 
@@ -87,6 +89,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 async def save_upload(file: UploadFile) -> Path:
     ext = Path(file.filename).suffix.lower()
@@ -328,3 +331,28 @@ async def validate_signature_endpoint(
         path.unlink(missing_ok=True)
 
     return JSONResponse(status_code=200, content=result)
+
+@app.get("/proxy-image", tags=["Utility"])
+def proxy_image(url: str):
+    """Fetch an image from an external URL to bypass CORS on the frontend."""
+    import requests
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        # Determine mime type from headers or default to jpeg
+        content_type = response.headers.get('content-type', 'image/jpeg')
+        b64_data = base64.b64encode(response.content).decode("ascii")
+        
+        return JSONResponse(status_code=200, content={
+            "success": True, 
+            "base64": f"data:{content_type};base64,{b64_data}"
+        })
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {str(e)}")
+
+# /analyze-frame endpoint removed. Liveness processing now handled in frontend.
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

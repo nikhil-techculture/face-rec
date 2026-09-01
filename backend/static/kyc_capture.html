@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KYC Facial Verification</title>
+    <!-- Use a modern, premium font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --panel-bg: rgba(30, 41, 59, 0.7);
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --success: #10b981;
+            --error: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-image: radial-gradient(circle at 50% -20%, #1e3a8a 0%, var(--bg-dark) 50%);
+        }
+
+        .container {
+            width: 90%;
+            max-width: 600px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+
+        h1 { margin-top: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+        p.subtitle { color: var(--text-muted); margin-bottom: 30px; line-height: 1.5; }
+
+        .input-group { display: flex; gap: 12px; margin-bottom: 30px; }
+        input[type="text"] {
+            flex: 1; padding: 14px 20px; border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2);
+            color: white; font-size: 16px; outline: none; transition: all 0.2s;
+        }
+        input[type="text"]:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
+
+        button {
+            padding: 14px 24px; border-radius: 12px; border: none; background: var(--primary);
+            color: white; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        button:hover { background: var(--primary-hover); transform: translateY(-1px); }
+        button:disabled { background: #475569; cursor: not-allowed; transform: none; }
+
+        .video-container {
+            position: relative; width: 100%; max-width: 400px; margin: 0 auto 30px;
+            border-radius: 20px; overflow: hidden; background: #000; display: none;
+            border: 2px solid rgba(255,255,255,0.1); box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            aspect-ratio: 3/4;
+        }
+
+        .face-guide {
+            position: absolute; top: 50%; left: 50%;
+            width: 220px; height: 320px; border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.65);
+            border: 2px dashed rgba(255, 255, 255, 0.5);
+            z-index: 5; pointer-events: none;
+            transition: border-color 0.3s;
+        }
+        .face-guide.active { border-color: var(--success); }
+
+        video, #snapshot-img, canvas { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        #snapshot-img { transform: scaleX(1); }
+        canvas { position: absolute; top: 0; left: 0; }
+
+        .status-badge {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); padding: 8px 16px;
+            border-radius: 20px; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; z-index: 10;
+        }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; }
+        .status-dot.loading { background: #3b82f6; animation: pulse 1.5s infinite; }
+        .status-dot.success { background: var(--success); }
+        .status-dot.error { background: var(--error); }
+        .status-dot.warning { background: #f59e0b; }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.5; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.5; }
+        }
+
+        .hidden { display: none !important; }
+
+        .loader-wrapper { display: none; flex-direction: column; align-items: center; margin: 20px 0; }
+        .loader {
+            border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid var(--primary);
+            border-radius: 50%; width: 32px; height: 32px; animation: spin 1s linear infinite; margin-bottom: 12px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        #reference-preview { width: 60px; height: 60px; border-radius: 50%; object-fit: cover; border: 2px solid rgba(255,255,255,0.2); margin: 0 auto 20px; display: none; }
+        
+        .action-buttons { display: flex; gap: 12px; justify-content: center; margin-top: 20px; }
+        .btn-success { background: var(--success); }
+        .btn-success:hover { background: #059669; }
+        .btn-outline { background: transparent; border: 1px solid rgba(255,255,255,0.3); }
+        .btn-outline:hover { background: rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>KYC Facial Verification</h1>
+        <p class="subtitle" id="instruction-text">Initializing security protocols...</p>
+
+        <img id="reference-preview" src="" alt="Reference Face">
+
+        <div class="loader-wrapper" id="loader">
+            <div class="loader"></div>
+            <span id="loader-text" style="color: var(--text-muted); font-size: 14px;">Loading MediaPipe AI models...</span>
+        </div>
+
+        <div class="video-container" id="video-container">
+            <video id="video" autoplay playsinline muted></video>
+            <div class="face-guide" id="face-guide"></div>
+            <img id="snapshot-img" class="hidden" />
+            <canvas id="overlay"></canvas>
+            <div class="status-badge" id="status-badge">
+                <div class="status-dot loading" id="status-dot"></div>
+                <span id="status-text">Initializing...</span>
+            </div>
+        </div>
+        
+        <div class="action-buttons hidden" id="pre-capture-actions">
+            <button class="btn-success" id="manual-capture-btn">📸 Capture Photo</button>
+        </div>
+
+        <div class="action-buttons hidden" id="action-buttons">
+            <button class="btn-outline" id="retake-btn">Retake</button>
+            <button class="btn-success" id="submit-btn">Save & Verify</button>
+        </div>
+    </div>
+
+    <!-- MediaPipe Modules -->
+    <script type="module">
+        import { FaceLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs";
+
+        let faceLandmarker = null;
+        let modelsLoaded = false;
+        let videoStream = null;
+        let isCaptured = false;
+        
+        // Blink State Machine
+        let blinkState = "WAITING"; // WAITING -> OPEN -> CLOSED -> BLINKED
+        let framesSinceLastBlurCheck = 0;
+        let isBlurry = false;
+        
+        // Elements
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const overlayCtx = overlay.getContext('2d');
+        const videoContainer = document.getElementById('video-container');
+        const loader = document.getElementById('loader');
+        const loaderText = document.getElementById('loader-text');
+        const statusText = document.getElementById('status-text');
+        const statusDot = document.getElementById('status-dot');
+        const referencePreview = document.getElementById('reference-preview');
+        const snapshotImg = document.getElementById('snapshot-img');
+        const actionButtons = document.getElementById('action-buttons');
+        const retakeBtn = document.getElementById('retake-btn');
+        const submitBtn = document.getElementById('submit-btn');
+        const preCaptureActions = document.getElementById('pre-capture-actions');
+        const manualCaptureBtn = document.getElementById('manual-capture-btn');
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        
+        // Geolocation state
+        let locationVerified = false;
+        let currentLatitude = null;
+        let currentLongitude = null;
+
+        function isWithinIndia(lat, lng) {
+            return lat >= 6.5 && lat <= 37.5 && lng >= 68.0 && lng <= 97.5;
+        }
+
+        function verifyLocation() {
+            return new Promise((resolve) => {
+                if (!navigator.geolocation) {
+                    alert('Location access is required. Your browser does not support geolocation.');
+                    return resolve(false);
+                }
+                setStatus('Verifying your location...', 'loading');
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const { latitude, longitude } = position.coords;
+                        if (isWithinIndia(latitude, longitude)) {
+                            locationVerified = true;
+                            currentLatitude = latitude;
+                            currentLongitude = longitude;
+                            setStatus('Location verified.', 'success');
+                            resolve(true);
+                        } else {
+                            alert('This service is only available within India.');
+                            setStatus('Location outside India.', 'error');
+                            resolve(false);
+                        }
+                    },
+                    (error) => {
+                        alert('Location access denied. Please allow location permission to proceed.');
+                        setStatus('Location access denied.', 'error');
+                        resolve(false);
+                    },
+                    { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+                );
+            });
+        }
+        
+        // Auto-start flow unconditionally
+        (async () => {
+            try {
+                if (!token) {
+                    setStatus("Invalid link. No token found.", "error");
+                    alert("Invalid link. No token found.");
+                    return;
+                }
+                
+                document.getElementById('instruction-text').innerText = "Follow the instructions on screen to prove you are live.";
+                
+                const locOk = await verifyLocation();
+                if (!locOk) return;
+
+                await loadModels();
+                await startCamera();
+            } catch (err) {
+                console.error(err);
+                alert(err.message || "Failed to initialize verification.");
+            }
+        })();
+
+        function setStatus(text, type) {
+            statusText.innerText = text;
+            statusDot.className = `status-dot ${type}`;
+        }
+
+
+
+        async function loadModels() {
+            if (modelsLoaded) return;
+            loader.style.display = 'flex';
+            loaderText.innerText = "Loading MediaPipe AI models... (one-time)";
+            
+            try {
+                const filesetResolver = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+                );
+                faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                        delegate: "GPU"
+                    },
+                    outputFaceBlendshapes: true,
+                    runningMode: "VIDEO",
+                    numFaces: 2 
+                });
+                modelsLoaded = true;
+                loader.style.display = 'none';
+            } catch (err) {
+                console.error("Failed to load models:", err);
+                loaderText.innerText = "Error loading AI models. Check internet connection.";
+                loader.querySelector('.loader').style.display = 'none';
+                throw err;
+            }
+        }
+
+        // Fast JS Laplacian Variance for Blur Detection
+        function checkBlur() {
+            const blurCanvas = document.createElement('canvas');
+            const SCALE = 200; // Small scale for performance
+            const ratio = video.videoHeight / video.videoWidth;
+            blurCanvas.width = SCALE;
+            blurCanvas.height = SCALE * ratio;
+            const bCtx = blurCanvas.getContext('2d');
+            bCtx.drawImage(video, 0, 0, blurCanvas.width, blurCanvas.height);
+            
+            const imageData = bCtx.getImageData(0, 0, blurCanvas.width, blurCanvas.height);
+            const data = imageData.data;
+            const w = blurCanvas.width;
+            const h = blurCanvas.height;
+            
+            // Grayscale
+            const gray = new Uint8Array(w * h);
+            for (let i = 0; i < data.length; i += 4) {
+                gray[i/4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+            }
+            
+            // Laplacian 3x3
+            let sum = 0, sqSum = 0, count = 0;
+            for (let y = 1; y < h - 1; y++) {
+                for (let x = 1; x < w - 1; x++) {
+                    const idx = y * w + x;
+                    const lap = 
+                        -1 * gray[idx - w - 1] + -1 * gray[idx - w] + -1 * gray[idx - w + 1] +
+                        -1 * gray[idx - 1]         +  8 * gray[idx]         + -1 * gray[idx + 1] +
+                        -1 * gray[idx + w - 1] + -1 * gray[idx + w] + -1 * gray[idx + w + 1];
+                    
+                    sum += lap;
+                    sqSum += lap * lap;
+                    count++;
+                }
+            }
+            const mean = sum / count;
+            const variance = (sqSum / count) - (mean * mean);
+            isBlurry = variance < 50; // Threshold
+        }
+
+        let lastVideoTime = -1;
+        async function predictWebcam() {
+            if (isCaptured) return;
+            
+            overlay.width = video.videoWidth;
+            overlay.height = video.videoHeight;
+            
+            let startTimeMs = performance.now();
+            
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                
+                const results = faceLandmarker.detectForVideo(video, startTimeMs);
+                overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+                
+                if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+                    if (results.faceLandmarks.length > 1) {
+                        setStatus("Only one person should be visible", "error");
+                        blinkState = "WAITING";
+                    } else {
+                        // 1 Face
+                        framesSinceLastBlurCheck++;
+                        if (framesSinceLastBlurCheck > 10) {
+                            checkBlur();
+                            framesSinceLastBlurCheck = 0;
+                        }
+                        
+                        if (isBlurry) {
+                            setStatus("Hold steady, photo is blurry", "warning");
+                            blinkState = "WAITING";
+                        } else {
+                            // 1. Check Head Pose & Positioning
+                            const landmarks = results.faceLandmarks[0];
+                            const nose = landmarks[1];
+                            const leftEdge = landmarks[234];
+                            const rightEdge = landmarks[454];
+                            const faceWidth = rightEdge.x - leftEdge.x;
+                            const yawRatio = (nose.x - leftEdge.x) / faceWidth;
+                            
+                            const faceCenterX = (leftEdge.x + rightEdge.x) / 2;
+                            const faceCenterY = nose.y; // Roughly center
+                            const distFromCenter = Math.hypot(faceCenterX - 0.5, faceCenterY - 0.5);
+                            const faceGuide = document.getElementById('face-guide');
+                            
+                            if (distFromCenter > 0.15) {
+                                setStatus("Center your face in the oval", "warning");
+                                blinkState = "WAITING";
+                                faceGuide.classList.remove('active');
+                            } else if (faceWidth < 0.20) {
+                                setStatus("Move closer", "warning");
+                                blinkState = "WAITING";
+                                faceGuide.classList.remove('active');
+                            } else if (faceWidth > 0.45) {
+                                setStatus("Move slightly back", "warning");
+                                blinkState = "WAITING";
+                                faceGuide.classList.remove('active');
+                            } else if (yawRatio < 0.35 || yawRatio > 0.65) {
+                                setStatus("Please look straight into the camera", "warning");
+                                blinkState = "WAITING";
+                                faceGuide.classList.remove('active');
+                            } else {
+                                faceGuide.classList.add('active');
+                                // Draw nice green face mesh overlay
+                                const drawingUtils = new DrawingUtils(overlayCtx);
+                                for (const landmarks of results.faceLandmarks) {
+                                    drawingUtils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#10b98144", lineWidth: 1 });
+                                    drawingUtils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE, { color: "#10b981" });
+                                    drawingUtils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_LEFT_EYE, { color: "#10b981" });
+                                }
+                                
+                                // Geometric EAR Calculation (much more reliable than blendshapes for all eye types)
+                                const getEAR = (indices) => {
+                                    const p = indices.map(i => landmarks[i]);
+                                    const v1 = Math.hypot(p[1].x - p[5].x, p[1].y - p[5].y);
+                                    const v2 = Math.hypot(p[2].x - p[4].x, p[2].y - p[4].y);
+                                    const h = Math.hypot(p[0].x - p[3].x, p[0].y - p[3].y);
+                                    return (v1 + v2) / (2.0 * h);
+                                };
+                                const leftEAR = getEAR([362, 385, 387, 263, 373, 380]);
+                                const rightEAR = getEAR([33, 160, 158, 133, 153, 144]);
+                                const avgEAR = (leftEAR + rightEAR) / 2.0;
+                                
+                                const isOpen = avgEAR > 0.20;
+                                const isClosed = avgEAR < 0.175;
+                                
+                                if (blinkState === "WAITING" && isOpen) {
+                                    blinkState = "OPEN";
+                                } else if (blinkState === "OPEN" && isClosed) {
+                                    blinkState = "CLOSED";
+                                } else if (blinkState === "CLOSED" && isOpen) {
+                                    blinkState = "BLINKED";
+                                    setStatus("Blink confirmed! Capturing...", "success");
+                                    // Auto capture on blink success
+                                    setTimeout(() => captureSnapshot(), 300);
+                                }
+                                
+                                if (blinkState !== "BLINKED") {
+                                    setStatus("Please BLINK your eyes", "loading");
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    setStatus("Position your face inside the frame", "loading");
+                    blinkState = "WAITING";
+                }
+            }
+            
+            if (!isCaptured) {
+                requestAnimationFrame(predictWebcam);
+            }
+        }
+
+        async function startCamera() {
+            videoContainer.style.display = 'block';
+            isCaptured = false;
+            blinkState = "WAITING";
+            snapshotImg.classList.add('hidden');
+            
+            video.classList.remove('hidden');
+            overlay.classList.remove('hidden');
+            document.getElementById('face-guide').classList.remove('hidden');
+            actionButtons.classList.add('hidden');
+            preCaptureActions.classList.add('hidden');
+
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                video.srcObject = videoStream;
+                video.play();
+                
+                video.addEventListener("loadeddata", predictWebcam);
+            } catch (err) {
+                console.error("Camera access denied", err);
+                setStatus("Camera access denied", "error");
+            }
+        }
+        
+        function stopCamera() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+        }
+        
+        function captureSnapshot() {
+            isCaptured = true;
+            const canvas = document.createElement('canvas');
+            
+            // Frame is 3:4 aspect ratio
+            const targetRatio = 3 / 4;
+            const videoRatio = video.videoWidth / video.videoHeight;
+            
+            let drawWidth = video.videoWidth;
+            let drawHeight = video.videoHeight;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            if (videoRatio > targetRatio) {
+                // Video is wider than target. Crop sides.
+                drawWidth = video.videoHeight * targetRatio;
+                offsetX = (video.videoWidth - drawWidth) / 2;
+            } else {
+                // Video is taller than target. Crop top/bottom.
+                drawHeight = video.videoWidth / targetRatio;
+                offsetY = (video.videoHeight - drawHeight) / 2;
+            }
+
+            canvas.width = drawWidth;
+            canvas.height = drawHeight;
+            const ctx = canvas.getContext('2d');
+            
+            // Mirror capture
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
+            
+            // Crop source video to exactly match the 3:4 container
+            ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight, 0, 0, drawWidth, drawHeight);
+            
+            const base64Img = canvas.toDataURL('image/jpeg', 0.9);
+            
+            stopCamera();
+            video.classList.add('hidden');
+            overlay.classList.add('hidden');
+            document.getElementById('face-guide').classList.add('hidden');
+            
+            snapshotImg.src = base64Img;
+            snapshotImg.classList.remove('hidden');
+            
+            setStatus("Live photo captured!", "success");
+            actionButtons.classList.remove('hidden');
+        }
+
+
+        retakeBtn.addEventListener('click', () => {
+            startCamera();
+        });
+
+        manualCaptureBtn.addEventListener('click', () => captureSnapshot());
+        
+        submitBtn.addEventListener('click', async () => {
+            const base64Data = snapshotImg.src;
+            submitBtn.disabled = true;
+            submitBtn.innerText = "Submitting to Backend for Matching...";
+            
+            try {
+                if (!locationVerified || currentLatitude === null || currentLongitude === null) {
+                    alert('Location verification failed. Please refresh and allow location access in India.');
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "Save & Verify";
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append('imageBase64', base64Data);
+                formData.append('token', token);
+                formData.append('latitude', String(currentLatitude));
+                formData.append('longitude', String(currentLongitude));
+                
+                // Route directly to Node.js API layer
+                const response = await fetch('https://facerec.ezwealth.in/api/match-client', { 
+                    method: 'POST', 
+                    headers: { 'Authorization': 'Bearer ' + token },
+                    body: formData 
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.match) {
+                    alert("Face matched successfully! Selfie saved.");
+                    window.location.reload();
+                } else {
+                    alert(result.message || result.error || "Face not matched. Please retake.");
+                    setTimeout(() => {
+                        startCamera();
+                    }, 2500);
+                }
+            } catch (err) {
+                alert("Error submitting to server: " + err.message);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerText = "Save & Verify";
+            }
+        });
+    </script>
+</body>
+</html>

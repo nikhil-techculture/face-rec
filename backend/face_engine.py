@@ -597,3 +597,79 @@ def validate_signature(image_path: str) -> dict:
             "confidence": 0.0,
             "message": f"Error validating signature: {str(e)}"
         }
+
+import base64
+
+def calculate_ear(eye_points):
+    """Calculate Eye Aspect Ratio using 6 facial landmarks for an eye."""
+    A = np.linalg.norm(np.array(eye_points[1]) - np.array(eye_points[5]))
+    B = np.linalg.norm(np.array(eye_points[2]) - np.array(eye_points[4]))
+    C = np.linalg.norm(np.array(eye_points[0]) - np.array(eye_points[3]))
+    
+    if C == 0:
+        return 0.0
+    return (A + B) / (2.0 * C)
+
+def process_liveness_frame(base64_str: str) -> dict:
+    """
+    Decodes a base64 frame, detects face and eyes, calculates EAR for blinks,
+    and returns the precise coordinates of the face and eyes without rendering images.
+    """
+    try:
+        # Decode Base64
+        encoded_data = base64_str.split(',')[1] if ',' in base64_str else base64_str
+        nparr = np.frombuffer(base64.b64decode(encoded_data), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return {"error": "Could not decode image"}
+
+        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        
+        # Use HOG model (faster) instead of CNN for real-time
+        face_locations = face_recognition.face_locations(rgb_img, model="hog")
+        
+        blink_detected = False
+        ear = 0.0
+        payload = {
+            "blink_detected": False,
+            "ear": 0.0,
+            "face_detected": len(face_locations) > 0,
+            "face_box": None,
+            "left_eye": None,
+            "right_eye": None
+        }
+
+        if face_locations:
+            top, right, bottom, left = face_locations[0]
+            payload["face_box"] = {"top": top, "right": right, "bottom": bottom, "left": left}
+            
+            # Detect landmarks for eyes
+            landmarks_list = face_recognition.face_landmarks(rgb_img, face_locations)
+            
+            if landmarks_list:
+                landmarks = landmarks_list[0]
+                
+                if 'left_eye' in landmarks and 'right_eye' in landmarks:
+                    left_eye = landmarks['left_eye']
+                    right_eye = landmarks['right_eye']
+                    
+                    payload["left_eye"] = left_eye
+                    payload["right_eye"] = right_eye
+                    
+                    # Calculate EAR
+                    left_ear = calculate_ear(left_eye)
+                    right_ear = calculate_ear(right_eye)
+                    ear = (left_ear + right_ear) / 2.0
+                    
+                    # Tighten blink threshold to prevent head movement from triggering false blinks
+                    if ear < 0.21:
+                        blink_detected = True
+                        
+            payload["blink_detected"] = blink_detected
+            payload["ear"] = round(ear, 3)
+
+        return payload
+
+    except Exception as e:
+        print(f"Error in process_liveness_frame: {e}")
+        return {"error": str(e)}
