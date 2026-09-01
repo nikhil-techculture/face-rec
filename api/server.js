@@ -16,7 +16,20 @@ const CMS_UPDATE_PROFILE_URL = process.env.CMS_UPDATE_PROFILE_URL || "https://cm
 const CMS_BANK_STATEMENT_URL = process.env.CMS_BANK_STATEMENT_URL || "https://cms.ezwealth.in/api/auth-client/bank-statement-pdf";
 
 // Security & logging middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      scriptSrcElem: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      connectSrc: ["'self'", "https://cdn.jsdelivr.net", "https://storage.googleapis.com"],
+      imgSrc: ["'self'", "data:", "blob:", "https://storage.googleapis.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      mediaSrc: ["'self'", "blob:"]
+    },
+  },
+}));
 app.use(morgan("combined"));
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",") : "*"
