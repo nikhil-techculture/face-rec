@@ -23,6 +23,7 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static("public"));
+app.use("/static", express.static("static"));
 
 // Multer v2 — memory storage, 10MB limit
 const { memoryStorage } = multer;
