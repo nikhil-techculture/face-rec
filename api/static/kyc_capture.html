@@ -529,7 +529,7 @@
         submitBtn.addEventListener('click', async () => {
             const base64Data = snapshotImg.src;
             submitBtn.disabled = true;
-            submitBtn.innerText = "Submitting to Backend for Matching...";
+            submitBtn.innerText = "processing...";
             
             try {
                 if (!locationVerified || currentLatitude === null || currentLongitude === null) {
