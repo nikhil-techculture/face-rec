@@ -501,9 +501,11 @@
             // Mirror capture
             ctx.translate(canvas.width, 0);
             ctx.scale(-1, 1);
+            ctx.filter = 'brightness(1.2) contrast(1.1)';
             
             // Crop source video to exactly match the 3:4 container
             ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight, 0, 0, drawWidth, drawHeight);
+            ctx.filter = 'none';
             
             const base64Img = canvas.toDataURL('image/jpeg', 0.9);
             
