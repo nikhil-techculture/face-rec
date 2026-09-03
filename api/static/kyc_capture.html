@@ -471,47 +471,6 @@
             }
         }
         
-        // Sample center face area luminance (0-255). Used to decide if capture needs a light boost.
-        function getCenterBrightness(ctx, width, height) {
-            const sampleW = Math.max(1, Math.floor(width * 0.5));
-            const sampleH = Math.max(1, Math.floor(height * 0.5));
-            const sx = Math.floor((width - sampleW) / 2);
-            const sy = Math.floor((height - sampleH) / 2);
-            const { data } = ctx.getImageData(sx, sy, sampleW, sampleH);
-            let sum = 0;
-            let count = 0;
-            for (let i = 0; i < data.length; i += 16) {
-                sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-                count++;
-            }
-            return count ? sum / count : 255;
-        }
-
-        // If selfie is dark (no flash / low light), brighten + slight contrast before match.
-        // Does not change API flow — only improves lighting of the captured frame.
-        function enhanceIfDark(canvas) {
-            const ctx = canvas.getContext('2d');
-            const { width, height } = canvas;
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-            const avg = getCenterBrightness(ctx, width, height);
-            if (avg >= 115) return false;
-
-            const source = document.createElement('canvas');
-            source.width = width;
-            source.height = height;
-            source.getContext('2d').drawImage(canvas, 0, 0);
-
-            const boost = Math.min(1.55, 1.15 + (115 - avg) / 160);
-            const contrast = avg < 80 ? 1.12 : 1.06;
-
-            ctx.clearRect(0, 0, width, height);
-            ctx.filter = `brightness(${boost}) contrast(${contrast})`;
-            ctx.drawImage(source, 0, 0);
-            ctx.filter = 'none';
-            return true;
-        }
-
         function captureSnapshot() {
             isCaptured = true;
             const canvas = document.createElement('canvas');
@@ -545,11 +504,8 @@
             
             // Crop source video to exactly match the 3:4 container
             ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight, 0, 0, drawWidth, drawHeight);
-
-            // Low-light / no-flash captures: auto brighten before sending to match API
-            const wasEnhanced = enhanceIfDark(canvas);
             
-            const base64Img = canvas.toDataURL('image/jpeg', 0.92);
+            const base64Img = canvas.toDataURL('image/jpeg', 0.9);
             
             stopCamera();
             video.classList.add('hidden');
@@ -559,10 +515,7 @@
             snapshotImg.src = base64Img;
             snapshotImg.classList.remove('hidden');
             
-            setStatus(
-                wasEnhanced ? "Live photo captured (light enhanced)" : "Live photo captured!",
-                "success"
-            );
+            setStatus("Live photo captured!", "success");
             actionButtons.classList.remove('hidden');
         }
 
