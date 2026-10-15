@@ -119,7 +119,8 @@ Authorization: Bearer <sessionToken>
 Flow:
 - Gateway fetches Digio reference selfie from CMS using Authorization header.
 - Matches uploaded image against reference selfie.
-- On successful match, saves to CMS `update-client-profile` with `selfieEkyc` (raw base64) plus `latitude` / `longitude` if provided.
+- On successful match, saves to CMS `update-client-profile` (or `/rekyc/update-signature-selfie` if `isRekyc=true`) with `selfieEkyc` (raw base64) plus `latitude` / `longitude` if provided.
+- If `isRekyc=true` (via body, query param, or header), the update is directed to the Re-KYC endpoint (`CMS_REKYC_UPDATE_SIGNATURE_SELFIE_URL`).
 
 Transparent PNG/WEBP images are accepted in both multipart and base64 input. They are normalized internally for processing.
 
@@ -170,7 +171,7 @@ Automatically rejects:
 - Random curly/scribble lines (invalid)
 - Empty or minimal signatures
 
-If the signature is valid and an Authorization header or token is provided, the gateway saves it to client profile as `wetSignature`.
+If the signature is valid and an Authorization header or token is provided, the gateway saves it to client profile as `wetSignature` (or to `/rekyc/update-signature-selfie` if `isRekyc=true`).
 
 ```
 POST /api/validate-signature
@@ -180,6 +181,7 @@ Fields:
   image       (file)    — signature image to validate
   imageBase64 (string)  — optional alternative: signature as base64 data URL or raw base64
   token       (string)  — optional if Authorization header is used for saving `wetSignature`
+  isRekyc     (boolean) — optional: if true, saves to /rekyc/update-signature-selfie instead of update-client-profile
 ```
 
 **Response (valid signature):**
@@ -307,8 +309,8 @@ curl -X DELETE http://localhost:1005/api/labels/user_123
 | PORT              | 1005                       | Node.js gateway port         |
 | PYTHON_API_URL    | http://localhost:1001      | Python backend URL           |
 | ALLOWED_ORIGINS   | *                          | Comma-separated CORS origins |
-| CMS_PROFILE_URL   | https://cms.ezwealth.in/api/auth-client/profile | CMS profile lookup URL |
 | CMS_UPDATE_PROFILE_URL | http://192.168.1.22:8000/api/clients/update-client-profile | Saves `selfieEkyc` and `wetSignature` on successful validation |
+| CMS_REKYC_UPDATE_SIGNATURE_SELFIE_URL | https://cms.ezwealth.in/api/clients/rekyc/update-signature-selfie | Saves `selfieEkyc` / `wetSignature` when `isRekyc=true` |
 
 ---
 

@@ -13,6 +13,12 @@ const PORT = process.env.PORT || 1005;
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:1001";
 const CMS_DIGIO_SELFIE_URL = process.env.CMS_DIGIO_SELFIE_URL || "https://cms.ezwealth.in/api/auth-client/digio-selfie";
 const CMS_UPDATE_PROFILE_URL = process.env.CMS_UPDATE_PROFILE_URL || "https://cms.ezwealth.in/api/clients/update-client-profile";
+const CMS_REKYC_UPDATE_SIGNATURE_SELFIE_URL =
+  process.env.CMS_REKYC_UPDATE_SIGNATURE_SELFIE_URL ||
+  process.env.CMS_REKYC_UPDATE_URL ||
+  (CMS_UPDATE_PROFILE_URL.includes("/update-client-profile")
+    ? CMS_UPDATE_PROFILE_URL.replace("/update-client-profile", "/rekyc/update-signature-selfie")
+    : "https://cms.ezwealth.in/api/clients/rekyc/update-signature-selfie");
 const CMS_BANK_STATEMENT_URL = process.env.CMS_BANK_STATEMENT_URL || "https://cms.ezwealth.in/api/auth-client/bank-statement-pdf";
 
 // Security & logging middleware
@@ -185,6 +191,16 @@ function summarizeCmsSavePayload(fieldName, imageValue, extraFields = {}) {
   };
 }
 
+function isRekycRequest(req) {
+  const val = req.body?.isRekyc ?? req.body?.is_rekyc ?? req.query?.isRekyc ?? req.query?.is_rekyc ?? req.headers?.["x-is-rekyc"];
+  if (val === true || val === 1) return true;
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    return s === "true" || s === "1" || s === "yes";
+  }
+  return false;
+}
+
 function toImageDataUrl(base64Value, mimeType = "image/jpeg") {
   const value = stripDataUriPrefix(base64Value);
   if (!value) return "";
@@ -277,6 +293,74 @@ async function updateClientProfileImageWithFallback(fieldName, imageInput, rawTo
     try {
       // Fallback for CMS variants that expect a full data URL.
       return await updateClientProfileImage(fieldName, dataUrlValue, rawToken, authorizationHeader, extraFields);
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+async function saveRekycSignatureSelfie(fieldName, imageValue, rawToken, authorizationHeader, extraFields = {}) {
+  const bearer = buildBearerToken(rawToken, authorizationHeader);
+  if (!bearer && !extraFields.clientId) {
+    return {
+      updated: false,
+      skipped: true,
+      message: "Skipped Re-KYC save because neither token nor clientId was provided."
+    };
+  }
+
+  const payload = { [fieldName]: imageValue, ...extraFields };
+  const headers = {
+    "Content-Type": "application/json"
+  };
+  if (bearer) {
+    headers.Authorization = bearer;
+  }
+
+  const { data } = await axios.post(CMS_REKYC_UPDATE_SIGNATURE_SELFIE_URL, payload, {
+    headers,
+    timeout: 20000
+  });
+
+  return {
+    updated: true,
+    skipped: false,
+    message: data?.message || `Re-KYC ${fieldName} saved successfully.`,
+    data,
+    payload
+  };
+}
+
+async function saveRekycSignatureSelfieWithFallback(fieldName, imageInput, rawToken, authorizationHeader, extraFields = {}) {
+  const rawBase64Value = stripDataUriPrefix(imageInput.base64);
+  const dataUrlValue = toImageDataUrl(rawBase64Value, imageInput.mimeType || "image/jpeg");
+
+  try {
+    return await saveRekycSignatureSelfie(fieldName, rawBase64Value, rawToken, authorizationHeader, extraFields);
+  } catch (firstError) {
+    if (!dataUrlValue) {
+      throw firstError;
+    }
+    try {
+      return await saveRekycSignatureSelfie(fieldName, dataUrlValue, rawToken, authorizationHeader, extraFields);
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+async function saveRekycSignatureWithFallback(fieldName, signatureBase64, imageInput, rawToken, authorizationHeader, extraFields = {}) {
+  const rawBase64Value = stripDataUriPrefix(signatureBase64);
+  const dataUrlValue = toImageDataUrl(rawBase64Value, imageInput?.mimeType || "image/png");
+
+  try {
+    return await saveRekycSignatureSelfie(fieldName, rawBase64Value, rawToken, authorizationHeader, extraFields);
+  } catch (firstError) {
+    if (!dataUrlValue) {
+      throw firstError;
+    }
+    try {
+      return await saveRekycSignatureSelfie(fieldName, dataUrlValue, rawToken, authorizationHeader, extraFields);
     } catch {
       throw firstError;
     }
@@ -492,8 +576,14 @@ app.post("/api/match", upload.single("image"), async (req, res, next) => {
  */
 app.post("/api/match-client", upload.single("image"), async (req, res, next) => {
   try {
-    const { tolerance = "0.5", imageBase64, token, sessionToken } = req.body;
+    const { tolerance = "0.5", imageBase64, token, sessionToken, clientId } = req.body;
+    const isRekyc = isRekycRequest(req);
     const locationFields = extractLocationFromBody(req.body);
+    const resolvedClientId = clientId || req.query?.clientId;
+    const extraFields = {
+      ...locationFields,
+      ...(resolvedClientId ? { clientId: resolvedClientId } : {})
+    };
 
     const imageInput = getImageInput(req);
     if (!imageInput) {
@@ -519,28 +609,45 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
 
     if (result.match) {
       result.matched_image_base64 = digioSelfieBase64;
+      result.is_rekyc = isRekyc;
       try {
-        const profileUpdate = await updateClientProfileImageWithFallback(
-          "selfieEkyc",
-          imageInput,
-          token || sessionToken || "",
-          req.headers.authorization || "",
-          locationFields
-        );
+        const profileUpdate = isRekyc
+          ? await saveRekycSignatureSelfieWithFallback(
+              "selfieEkyc",
+              imageInput,
+              token || sessionToken || "",
+              req.headers.authorization || "",
+              extraFields
+            )
+          : await updateClientProfileImageWithFallback(
+              "selfieEkyc",
+              imageInput,
+              token || sessionToken || "",
+              req.headers.authorization || "",
+              locationFields
+            );
         result.profile_updated = profileUpdate.updated;
         result.profile_update_message = profileUpdate.message;
+        if (profileUpdate.data) {
+          result.profile_update_data = profileUpdate.data;
+        }
         result.cms_save_payload = summarizeCmsSavePayload(
           "selfieEkyc",
           stripDataUriPrefix(imageInput.base64),
-          locationFields
+          isRekyc ? extraFields : locationFields
         );
       } catch (saveError) {
-        console.error("[PROFILE_UPDATE] Failed to save selfieEkyc.", {
-          status: saveError.response?.status || "internal",
-          message: saveError.message
-        });
+        console.error(
+          isRekyc ? "[REKYC_UPDATE] Failed to save selfie to Re-KYC endpoint." : "[PROFILE_UPDATE] Failed to save selfieEkyc.",
+          {
+            status: saveError.response?.status || "internal",
+            message: saveError.message
+          }
+        );
         result.profile_updated = false;
-        result.profile_update_message = "Face matched but selfieEkyc save failed.";
+        result.profile_update_message = isRekyc
+          ? "Face matched but Re-KYC selfie save failed."
+          : "Face matched but selfieEkyc save failed.";
         result.profile_update_error = saveError.response?.data || saveError.message;
       }
     } else {
@@ -604,7 +711,15 @@ app.delete("/api/labels/:label", async (req, res, next) => {
  */
 app.post("/api/validate-signature", upload.single("image"), async (req, res, next) => {
   try {
-    const { token, sessionToken } = req.body;
+    const { token, sessionToken, clientId } = req.body;
+    const isRekyc = isRekycRequest(req);
+    const locationFields = extractLocationFromBody(req.body);
+    const resolvedClientId = clientId || req.query?.clientId;
+    const extraFields = {
+      ...locationFields,
+      ...(resolvedClientId ? { clientId: resolvedClientId } : {})
+    };
+
     const imageInput = getImageInput(req);
 
     if (!imageInput) {
@@ -620,23 +735,48 @@ app.post("/api/validate-signature", upload.single("image"), async (req, res, nex
     );
 
     if (result.valid) {
+      result.is_rekyc = isRekyc;
       try {
         const signatureBase64ForSave = result.normalized_base64 || imageInput.base64;
-        const profileUpdate = await updateClientProfileImage(
-          "wetSignature",
-          signatureBase64ForSave,
-          token || sessionToken || "",
-          req.headers.authorization || ""
-        );
+        const profileUpdate = isRekyc
+          ? await saveRekycSignatureWithFallback(
+              "wetSignature",
+              signatureBase64ForSave,
+              imageInput,
+              token || sessionToken || "",
+              req.headers.authorization || "",
+              extraFields
+            )
+          : await updateClientProfileImage(
+              "wetSignature",
+              signatureBase64ForSave,
+              token || sessionToken || "",
+              req.headers.authorization || ""
+            );
         result.profile_updated = profileUpdate.updated;
         result.profile_update_message = profileUpdate.message;
+        if (profileUpdate.data) {
+          result.profile_update_data = profileUpdate.data;
+        }
+        if (isRekyc) {
+          result.cms_save_payload = summarizeCmsSavePayload(
+            "wetSignature",
+            signatureBase64ForSave,
+            extraFields
+          );
+        }
       } catch (saveError) {
-        console.error("[PROFILE_UPDATE] Failed to save wetSignature.", {
-          status: saveError.response?.status || "internal",
-          message: saveError.message
-        });
+        console.error(
+          isRekyc ? "[REKYC_UPDATE] Failed to save wetSignature to Re-KYC endpoint." : "[PROFILE_UPDATE] Failed to save wetSignature.",
+          {
+            status: saveError.response?.status || "internal",
+            message: saveError.message
+          }
+        );
         result.profile_updated = false;
-        result.profile_update_message = "Signature validated but wetSignature save failed.";
+        result.profile_update_message = isRekyc
+          ? "Signature validated but Re-KYC wetSignature save failed."
+          : "Signature validated but wetSignature save failed.";
         result.profile_update_error = saveError.response?.data || saveError.message;
       }
     } else {
