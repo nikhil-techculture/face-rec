@@ -187,6 +187,15 @@
 
         const urlParams = new URLSearchParams(window.location.search);
         const token = urlParams.get('token');
+        const isRekyc = urlParams.get('isRekyc') ?? urlParams.get('is_rekyc');
+        const clientId = urlParams.get('clientId');
+        
+        // Update UI dynamically if Re-KYC request
+        if (isRekyc && (isRekyc === 'true' || isRekyc === '1' || isRekyc.toLowerCase() === 'yes')) {
+            const h1 = document.querySelector('h1');
+            if (h1) h1.innerText = "Re-KYC Facial Verification";
+            document.title = "Re-KYC Facial Verification";
+        }
         
         // Geolocation state
         let locationVerified = false;
@@ -544,20 +553,31 @@
                 const formData = new FormData();
                 formData.append('imageBase64', base64Data);
                 formData.append('token', token);
+                if (isRekyc !== null && isRekyc !== undefined) {
+                    formData.append('isRekyc', isRekyc);
+                }
+                if (clientId) {
+                    formData.append('clientId', clientId);
+                }
                 formData.append('latitude', String(currentLatitude));
                 formData.append('longitude', String(currentLongitude));
                 
                 // Route directly to Node.js API layer
+                const reqHeaders = { 'Authorization': 'Bearer ' + token };
+                if (isRekyc !== null && isRekyc !== undefined) {
+                    reqHeaders['x-is-rekyc'] = String(isRekyc);
+                }
+
                 const response = await fetch('https://facerec.ezwealth.in/api/match-client', { 
                     method: 'POST', 
-                    headers: { 'Authorization': 'Bearer ' + token },
+                    headers: reqHeaders,
                     body: formData 
                 });
                 
                 const result = await response.json();
                 
                 if (response.ok && result.match) {
-                    alert("Face matched successfully! Selfie saved.");
+                    alert(result.profile_update_message || (isRekyc ? "Face matched successfully! Re-KYC selfie saved." : "Face matched successfully! Selfie saved."));
                     window.location.reload();
                 } else {
                     alert(result.message || result.error || "Face not matched. Please retake.");
