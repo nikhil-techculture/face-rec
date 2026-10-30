@@ -367,10 +367,17 @@ async function saveRekycSignatureWithFallback(fieldName, signatureBase64, imageI
   }
 }
 
-async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader) {
+async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader, extraPayload = {}) {
+  const payload = {
+    pdfBase64,
+    ...(typeof extraPayload === "object" && extraPayload !== null ? extraPayload : {})
+  };
+  if (typeof extraPayload === "boolean" && extraPayload) {
+    payload.isFromSegmentUpdate = true;
+  }
   return submitCmsJson(
     CMS_BANK_STATEMENT_URL,
-    { pdfBase64 },
+    payload,
     rawToken,
     authorizationHeader
   );
@@ -835,7 +842,7 @@ app.post(
   uploadWithDoc.single("document"),
   async (req, res, next) => {
     try {
-      const { username, token, sessionToken } = req.body;
+      const { username, token, sessionToken, isFromSegmentUpdate } = req.body;
       if (!username) return res.status(400).json({ error: "Field 'username' is required." });
       if (!req.file)  return res.status(400).json({ error: "Field 'document' (file) is required." });
 
@@ -847,10 +854,17 @@ app.post(
 
       if (result.verified) {
         try {
+          const isSegmentUpdate =
+            isFromSegmentUpdate === true ||
+            (typeof isFromSegmentUpdate === "string" && ["true", "1", "yes"].includes(isFromSegmentUpdate.trim().toLowerCase()));
+
+          const extraPayload = isSegmentUpdate ? { isFromSegmentUpdate: true } : {};
+
           const bankStatementSave = await saveBankStatementPdf(
             bufferToBase64(req.file.buffer),
             token || sessionToken || "",
-            req.headers.authorization || ""
+            req.headers.authorization || "",
+            extraPayload
           );
           result.bank_statement_saved = bankStatementSave.updated;
           result.bank_statement_save_message = bankStatementSave.message;
