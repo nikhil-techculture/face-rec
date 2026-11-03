@@ -234,10 +234,20 @@ Extracts multiple key banking details from an Indian cheque image or PDF (e.g. c
 POST /api/read-cheque
 Content-Type: multipart/form-data OR application/json
 
+Header (optional, to update client profile):
+  Authorization: Bearer <sessionToken>
+
 Fields:
-  cheque        (file)   — cheque file (JPG, PNG, WEBP, BMP, TIFF, or PDF)
-  chequeBase64  (string) — optional alternative: cheque as base64 string or data URL
+  cheque        (file)    — cheque file (JPG, PNG, WEBP, BMP, TIFF, or PDF)
+  chequeBase64  (string)  — optional alternative: cheque as base64 string or data URL
+  token         (string)  — optional token alternative if Authorization header is not used
+  isRekyc       (boolean) — optional: if true, saves to Re-KYC endpoint
 ```
+
+When bank details are extracted and an `Authorization` header or token is provided:
+- The gateway automatically updates the client profile with the extracted bank details (`accountNumber`, `ifscCode`, `bankName`, `branchName`, `branchAddress`, `accountHolderName`, `micrCode`, `chequeNumber`).
+- Saves the cheque document in base64 as `chequeCopy` to `CMS_UPDATE_PROFILE_URL` (or Re-KYC endpoint if `isRekyc=true`).
+- Returns `profile_updated: true`, `profile_update_message`, and `cms_save_payload`.
 
 **Response (Success):**
 ```json
@@ -283,6 +293,65 @@ Fields:
     "account_holder_name": 0.73
   },
   "raw_text": "..."
+}
+```
+
+---
+
+### Read Bank Statement
+
+Extracts bank name, account number (supports masked e-Passbook and unmasked formats), account holder name, IFSC, branch details, statement period, 6-month compliance verification, and opening/closing balances from bank statement PDFs or images.
+
+```
+POST /api/read-statement
+Content-Type: multipart/form-data OR application/json
+
+Fields (Multipart):
+  statement        (file)    — bank statement PDF or image file (JPG, PNG, WEBP, BMP, TIFF)
+  minMonths        (number)  — optional, minimum required duration in months (default: 6)
+
+Fields (JSON / Base64):
+  statementBase64  (string)  — base64 string or data URL of bank statement
+  minMonths        (number)  — optional, default 6
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "doc_type": "pdf",
+  "total_pages": 15,
+  "bank_name": "Canara Bank",
+  "account_number": "XXXXXXXXX7009",
+  "is_masked": true,
+  "masked_account_number": "XXXXXXXXX7009",
+  "unmasked_account_number": null,
+  "last_4_digits": "7009",
+  "account_holder_name": "Rahul Goel",
+  "ifsc_code": "CNRB0002742",
+  "branch_code": "2742",
+  "branch_name": "Delhi Najafgarh",
+  "branch_address": "#1624/14/2B, Revenue Estate, Main Thana Road, Najafagarh, DELHI NCT OF DELHI",
+  "statement_period": {
+    "start_date": "2026-03-16",
+    "end_date": "2026-06-15",
+    "start_date_display": "16-Mar-2026",
+    "end_date_display": "15-Jun-2026",
+    "days_covered": 91,
+    "months_covered": 3.0,
+    "has_6_months": false,
+    "required_months": 6,
+    "shortfall_days": 89,
+    "status_message": "Statement covers 91 days (~3.0 months). The 6-month requirement is NOT met (short by 89 days)."
+  },
+  "has_6_months": false,
+  "months_covered": 3.0,
+  "days_covered": 91,
+  "balances": {
+    "opening_balance": 4316.18,
+    "closing_balance": 15387.46
+  },
+  "transactions_detected": 156
 }
 ```
 

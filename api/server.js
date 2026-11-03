@@ -383,6 +383,67 @@ async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader, ex
   );
 }
 
+async function saveBankDetailsAndChequeToCms(bankResult, chequeBase64Value, rawToken, authorizationHeader, extraPayload = {}, isRekyc = false) {
+  const bearer = buildBearerToken(rawToken, authorizationHeader);
+  if (!bearer && !extraPayload.clientId) {
+    return {
+      updated: false,
+      skipped: true,
+      message: "Skipped profile update because token was not provided."
+    };
+  }
+
+  const cleanBase64 = stripDataUriPrefix(chequeBase64Value);
+  const payload = {
+    // Cheque document in base64
+    chequeCopy: cleanBase64,
+    chequeImage: cleanBase64,
+    cancelledCheque: cleanBase64,
+    bankProof: cleanBase64,
+
+    // Account & Bank details
+    accountNumber: bankResult.account_number || "",
+    account_number: bankResult.account_number || "",
+    ifscCode: bankResult.ifsc_code || "",
+    ifsc_code: bankResult.ifsc_code || "",
+    ifsc: bankResult.ifsc_code || "",
+    bankName: bankResult.bank_name || "",
+    bank_name: bankResult.bank_name || "",
+    branchName: bankResult.branch_details?.branch_name || "",
+    branch_name: bankResult.branch_details?.branch_name || "",
+    branchAddress: bankResult.branch_details?.address || bankResult.address || "",
+    branch_address: bankResult.branch_details?.address || bankResult.address || "",
+    accountHolderName: bankResult.account_holder_name || "",
+    account_holder_name: bankResult.account_holder_name || "",
+    micrCode: bankResult.micr_code || "",
+    micr_code: bankResult.micr_code || "",
+    chequeNumber: bankResult.cheque_number || "",
+    cheque_number: bankResult.cheque_number || "",
+    isRekyc: isRekyc,
+
+    ...(typeof extraPayload === "object" && extraPayload !== null ? extraPayload : {})
+  };
+
+  const targetUrl = CMS_UPDATE_PROFILE_URL;
+  const headers = { "Content-Type": "application/json" };
+  if (bearer) {
+    headers.Authorization = bearer;
+  }
+
+  const { data } = await axios.post(targetUrl, payload, {
+    headers,
+    timeout: 20000
+  });
+
+  return {
+    updated: true,
+    skipped: false,
+    message: data?.message || "Client profile updated with bank details and cheque successfully.",
+    data,
+    payload
+  };
+}
+
 function extractDigioSelfieImage(payload) {
   if (!payload || typeof payload !== "object") return null;
 
@@ -894,6 +955,69 @@ app.post(
 
 
 /**
+ * POST /api/read-statement
+ * Read a bank statement document (PDF or image) and extract:
+ *   - bank_name
+ *   - account_number & masking status
+ *   - account_holder_name
+ *   - ifsc_code, branch_code, branch_name, branch_address
+ *   - statement_period (start_date, end_date, days_covered, months_covered, has_6_months)
+ *   - balances (opening_balance, closing_balance)
+ * 
+ * Supports:
+ *   - Multipart: field 'statement', 'document', or 'file'
+ *   - Body JSON / form: 'statementBase64', 'documentBase64', or 'fileBase64'
+ *   - Optional query / body: 'minMonths' (default 6)
+ */
+app.post(
+  "/api/read-statement",
+  (req, res, next) => {
+    uploadWithDoc.fields([
+      { name: "statement", maxCount: 1 },
+      { name: "document", maxCount: 1 },
+      { name: "file", maxCount: 1 }
+    ])(req, res, (err) => {
+      if (err) return next(err);
+      next();
+    });
+  },
+  async (req, res, next) => {
+    try {
+      const file = req.files?.statement?.[0] || req.files?.document?.[0] || req.files?.file?.[0];
+      const statementBase64 = req.body?.statementBase64 || req.body?.documentBase64 || req.body?.fileBase64;
+      const minMonths = req.body?.minMonths || req.query?.minMonths || 6;
+
+      if (!file && !statementBase64) {
+        return res.status(400).json({
+          error: "Field 'statement' (file) or 'statementBase64' (string) is required."
+        });
+      }
+
+      let result;
+      if (file) {
+        result = await forwardMultiFileToPython(
+          "/read-statement",
+          { minMonths: String(minMonths) },
+          [{ fieldName: "statement", buffer: file.buffer, fileName: file.originalname, mimeType: file.mimetype }]
+        );
+      } else {
+        result = await forwardMultiFileToPython(
+          "/read-statement",
+          { statementBase64, minMonths: String(minMonths) },
+          []
+        );
+      }
+
+      res.status(200).json(result);
+    } catch (err) {
+      if (err.response) return res.status(err.response.status).json(err.response.data);
+      next(err);
+    }
+  }
+);
+
+
+/**
  * POST /api/read-cheque
  * Read a cheque document (image or PDF) and extract:
  *   - account_number
@@ -912,7 +1036,7 @@ app.post(
  *   - Body JSON / form: 'chequeBase64', 'imageBase64', or 'fileBase64'
  */
 app.post(
-  ["/api/read-cheque", "/read-cheque"],
+  "/api/read-cheque",
   (req, res, next) => {
     uploadWithDoc.fields([
       { name: "cheque", maxCount: 1 },
@@ -927,6 +1051,11 @@ app.post(
     try {
       const file = req.files?.cheque?.[0] || req.files?.document?.[0] || req.files?.image?.[0];
       const chequeBase64 = req.body?.chequeBase64 || req.body?.imageBase64 || req.body?.fileBase64;
+      const { token, sessionToken } = req.body || {};
+      const authHeader = req.headers.authorization || req.headers.token || req.headers["x-access-token"] || "";
+      const isRekyc = isRekycRequest(req);
+      const clientId = req.body?.clientId || req.body?.client_id || req.query?.clientId || req.query?.client_id;
+      const extraFields = isRekyc && clientId ? { clientId } : {};
 
       if (!file && !chequeBase64) {
         return res.status(400).json({
@@ -947,6 +1076,57 @@ app.post(
           { chequeBase64 },
           []
         );
+      }
+
+      // If bank details were extracted successfully, update client profile with bank details and cheque image
+      const hasBankDetails = result?.success && (result.account_number || result.ifsc_code);
+      if (hasBankDetails) {
+        const chequeBase64Value = file ? bufferToBase64(file.buffer) : stripDataUriPrefix(chequeBase64);
+        const bearer = buildBearerToken(token || sessionToken, authHeader);
+
+        if (bearer || extraFields.clientId) {
+          try {
+            const profileUpdate = await saveBankDetailsAndChequeToCms(
+              result,
+              chequeBase64Value,
+              token || sessionToken || "",
+              authHeader,
+              extraFields,
+              isRekyc
+            );
+            result.profile_updated = profileUpdate.updated;
+            result.profile_update_message = profileUpdate.message;
+            if (profileUpdate.data) {
+              result.profile_update_data = profileUpdate.data;
+            }
+            result.cms_save_payload = {
+              chequeCopy: chequeBase64Value ? `<base64, ${chequeBase64Value.length} characters>` : null,
+              accountNumber: result.account_number,
+              ifscCode: result.ifsc_code,
+              bankName: result.bank_name,
+              branchName: result.branch_details?.branch_name,
+              branchAddress: result.branch_details?.address || result.address,
+              accountHolderName: result.account_holder_name,
+              micrCode: result.micr_code,
+              chequeNumber: result.cheque_number
+            };
+          } catch (saveError) {
+            console.error("[PROFILE_UPDATE] Failed to update client profile with bank details and cheque.", {
+              status: saveError.response?.status || "internal",
+              message: saveError.message,
+              data: saveError.response?.data
+            });
+            result.profile_updated = false;
+            result.profile_update_message = "Bank details fetched but client profile update failed.";
+            result.profile_update_error = saveError.response?.data || saveError.message;
+          }
+        } else {
+          result.profile_updated = false;
+          result.profile_update_message = "Skipped profile update because token was not provided in headers or body.";
+        }
+      } else {
+        result.profile_updated = false;
+        result.profile_update_message = "Bank details could not be extracted from cheque.";
       }
 
       res.status(200).json(result);

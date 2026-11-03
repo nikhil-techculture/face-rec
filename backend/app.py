@@ -26,6 +26,7 @@ from face_engine import (
 )
 from doc_parser import extract_text, name_found_in_document
 from cheque_parser import read_cheque
+from statement_parser import read_bank_statement
 
 load_dotenv()
 
@@ -345,6 +346,52 @@ async def read_cheque_endpoint(
         result = read_cheque(str(path))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Failed to parse cheque: {str(e)}")
+    finally:
+        path.unlink(missing_ok=True)
+
+    if not result.get("success", True):
+        return JSONResponse(status_code=400, content=result)
+
+    return JSONResponse(status_code=200, content=result)
+
+
+@app.post("/read-statement", tags=["Bank Statement Reader"])
+@app.post("/api/read-statement", tags=["Bank Statement Reader"])
+async def read_statement_endpoint(
+    statement: Optional[UploadFile] = File(None, description="Bank statement PDF or image"),
+    document: Optional[UploadFile] = File(None, description="Alternative field name for statement file"),
+    file: Optional[UploadFile] = File(None, description="Alternative field name for statement file"),
+    statementBase64: Optional[str] = Form(None, description="Bank statement as base64 string or data URL"),
+    documentBase64: Optional[str] = Form(None, description="Alternative base64 field name"),
+    minMonths: int = Form(6, description="Required minimum statement duration in months (default: 6)")
+):
+    """
+    ## Read Bank Statement and Extract Information
+    
+    Extracts key information from an uploaded bank statement PDF or image:
+    - **bank_name**: Name of the bank (e.g. Canara Bank, HDFC Bank)
+    - **account_number**: Account number (indicates if masked e.g. XXXXXXXXX7009)
+    - **account_holder_name**: Name of the primary account holder
+    - **ifsc_code**: Bank branch IFSC code
+    - **branch_name**: Branch location name
+    - **branch_code**: Branch code
+    - **branch_address**: Branch physical address
+    - **statement_period**: Start date, end date, days & months covered
+    - **has_6_months**: Boolean flag indicating if statement satisfies >= 6 months (or custom minMonths)
+    - **balances**: Opening and closing balances
+    - **transactions_detected**: Estimated number of transaction rows
+    """
+    file_input = statement or document or file
+    b64_input = statementBase64 or documentBase64
+
+    if file_input is None and not b64_input:
+        raise HTTPException(status_code=400, detail="Provide 'statement' file or 'statementBase64'.")
+
+    path = await save_document_input(file_input, b64_input)
+    try:
+        result = read_bank_statement(str(path), min_months=minMonths)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to parse bank statement: {str(e)}")
     finally:
         path.unlink(missing_ok=True)
 
