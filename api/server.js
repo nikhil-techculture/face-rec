@@ -893,6 +893,71 @@ app.post(
 );
 
 
+/**
+ * POST /api/read-cheque
+ * Read a cheque document (image or PDF) and extract:
+ *   - account_number
+ *   - ifsc_code
+ *   - bank_name
+ *   - branch_details (branch_name, address)
+ *   - address
+ *   - account_holder_name
+ *   - signatory_name
+ *   - cheque_number
+ *   - micr_code
+ *   - confidence
+ * 
+ * Supports:
+ *   - Multipart: field 'cheque', 'document', or 'image'
+ *   - Body JSON / form: 'chequeBase64', 'imageBase64', or 'fileBase64'
+ */
+app.post(
+  ["/api/read-cheque", "/read-cheque"],
+  (req, res, next) => {
+    uploadWithDoc.fields([
+      { name: "cheque", maxCount: 1 },
+      { name: "document", maxCount: 1 },
+      { name: "image", maxCount: 1 }
+    ])(req, res, (err) => {
+      if (err) return next(err);
+      next();
+    });
+  },
+  async (req, res, next) => {
+    try {
+      const file = req.files?.cheque?.[0] || req.files?.document?.[0] || req.files?.image?.[0];
+      const chequeBase64 = req.body?.chequeBase64 || req.body?.imageBase64 || req.body?.fileBase64;
+
+      if (!file && !chequeBase64) {
+        return res.status(400).json({
+          error: "Field 'cheque' (file) or 'chequeBase64' (string) is required."
+        });
+      }
+
+      let result;
+      if (file) {
+        result = await forwardMultiFileToPython(
+          "/read-cheque",
+          {},
+          [{ fieldName: "cheque", buffer: file.buffer, fileName: file.originalname, mimeType: file.mimetype }]
+        );
+      } else {
+        result = await forwardMultiFileToPython(
+          "/read-cheque",
+          { chequeBase64 },
+          []
+        );
+      }
+
+      res.status(200).json(result);
+    } catch (err) {
+      if (err.response) return res.status(err.response.status).json(err.response.data);
+      next(err);
+    }
+  }
+);
+
+
 app.use(errorHandler);
 
 app.listen(PORT, () => {

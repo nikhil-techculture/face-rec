@@ -219,6 +219,75 @@ Fields:
 
 ---
 
+### Read Cheque (Extract Bank & Account Details)
+
+Extracts multiple key banking details from an Indian cheque image or PDF (e.g. cancelled cheque):
+- **Account Number** (9 to 18 digits)
+- **IFSC Code** (11 characters with automatic OCR error correction)
+- **Bank Name** (detected from text or inferred from IFSC bank prefix)
+- **Branch Details & Address** (Branch name, locality, road/street, postal PIN code)
+- **Account Holder Name** (Drawer name, Corporate account entity name, or signatory name)
+- **Signatory Name** (if corporate cheque)
+- **Cheque Number & MICR Code** (extracted from bottom CTS-2010 MICR band)
+
+```
+POST /api/read-cheque
+Content-Type: multipart/form-data OR application/json
+
+Fields:
+  cheque        (file)   — cheque file (JPG, PNG, WEBP, BMP, TIFF, or PDF)
+  chequeBase64  (string) — optional alternative: cheque as base64 string or data URL
+```
+
+**Response (Success):**
+```json
+{
+  "success": true,
+  "doc_type": "image",
+  "account_number": "05841050073037",
+  "account_number_verification": {
+    "has_previous_title": true,
+    "title_matched": "A/c No.",
+    "matches_ifsc_branch": true,
+    "matched_ifsc_suffix": "0584"
+  },
+  "image_quality": {
+    "is_quality_sufficient": true,
+    "overall_status": "Passed",
+    "checks": {
+      "sharpness": { "passed": true, "score": 150.6, "threshold": 50.0, "status": "Good" },
+      "brightness": { "passed": true, "score": 193.2, "min": 60.0, "max": 235.0, "status": "Normal" },
+      "contrast": { "passed": true, "score": 39.9, "threshold": 25.0, "status": "Good" },
+      "glare": { "passed": true, "score": 0.0, "max": 25.0, "status": "Normal" },
+      "resolution": { "passed": true, "width": 1430, "height": 3000, "status": "High Resolution" }
+    },
+    "issues": []
+  },
+  "ifsc_code": "HDFC0000584",
+  "bank_name": "HDFC Bank",
+  "branch_details": {
+    "branch_name": "Fort Mumbai",
+    "address": "Manekji Wadia Building, Nanik Motwani Marg, Fort, Mumbai - 400001"
+  },
+  "address": "Manekji Wadia Building, Nanik Motwani Marg, Fort, Mumbai - 400001",
+  "account_holder_name": "Anita Sharma",
+  "signatory_name": null,
+  "cheque_number": "123456",
+  "micr_code": "400240002",
+  "confidence": 0.931,
+  "confidence_scores": {
+    "account_number": 0.99,
+    "ifsc_code": 0.99,
+    "bank_name": 0.98,
+    "branch": 0.97,
+    "account_holder_name": 0.73
+  },
+  "raw_text": "..."
+}
+```
+
+---
+
 ### List Registered Labels
 
 ```

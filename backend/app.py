@@ -25,6 +25,7 @@ from face_engine import (
     process_liveness_frame,
 )
 from doc_parser import extract_text, name_found_in_document
+from cheque_parser import read_cheque
 
 load_dotenv()
 
@@ -271,6 +272,88 @@ async def save_document(file: UploadFile) -> Path:
         await f.write(content)
     return dest
 
+async def save_document_base64(doc_base64: str) -> Path:
+    payload = doc_base64.strip()
+    mime = ""
+    if payload.startswith("data:") and "," in payload:
+        header, payload = payload.split(",", 1)
+        mime = header.split(";")[0].replace("data:", "").lower()
+
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid base64 payload.")
+
+    if len(raw) > MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB allowed.")
+
+    if raw.startswith(b"%PDF") or mime == "application/pdf":
+        ext = ".pdf"
+        content = raw
+    else:
+        ext_hint = ".png" if mime == "image/png" else ".webp" if mime == "image/webp" else ".jpg"
+        content, ext = normalize_image_bytes(raw, detect_image_extension(raw, ext_hint))
+
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    async with aiofiles.open(dest, "wb") as f:
+        await f.write(content)
+    return dest
+
+
+async def save_document_input(file: Optional[UploadFile], base64_str: Optional[str]) -> Path:
+    if file is not None:
+        return await save_document(file)
+    if base64_str:
+        return await save_document_base64(base64_str)
+    raise HTTPException(status_code=400, detail="Provide either document file or base64 payload.")
+
+
+@app.post("/read-cheque", tags=["Cheque Reader"])
+@app.post("/api/read-cheque", tags=["Cheque Reader"])
+async def read_cheque_endpoint(
+    cheque: Optional[UploadFile] = File(None, description="Cheque document or image (PDF, JPG, PNG, WEBP, BMP, TIFF)"),
+    document: Optional[UploadFile] = File(None, description="Alternative field name for cheque file"),
+    image: Optional[UploadFile] = File(None, description="Alternative field name for cheque image"),
+    chequeBase64: Optional[str] = Form(None, description="Cheque as base64 string or data URL"),
+    imageBase64: Optional[str] = Form(None, description="Alternative base64 field name")
+):
+    """
+    ## Read Cheque and Extract Information
+    
+    Extracts key information from a cheque image or PDF:
+    - **account_number**: Bank account number (9-18 digits)
+    - **ifsc_code**: 11-digit IFSC code (with automatic OCR validation/correction)
+    - **bank_name**: Identified bank name
+    - **branch_details**: Object with branch_name and address
+    - **address**: Complete branch address
+    - **account_holder_name**: Name of the drawer/account holder
+    - **signatory_name**: Name of the authorized signatory (if corporate account)
+    - **cheque_number**: 6-digit cheque number (if present in MICR line)
+    - **micr_code**: 9-digit MICR code (if present)
+    - **confidence**: Overall confidence score (0-1.0)
+    - **confidence_scores**: Individual field confidences
+    - **raw_text**: Full OCR text
+    """
+    file_input = cheque or document or image
+    b64_input = chequeBase64 or imageBase64
+    
+    if file_input is None and not b64_input:
+        raise HTTPException(status_code=400, detail="Provide 'cheque' file or 'chequeBase64'.")
+
+    path = await save_document_input(file_input, b64_input)
+    try:
+        result = read_cheque(str(path))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to parse cheque: {str(e)}")
+    finally:
+        path.unlink(missing_ok=True)
+
+    if not result.get("success", True):
+        return JSONResponse(status_code=400, content=result)
+
+    return JSONResponse(status_code=200, content=result)
+
+
 
 @app.post("/verify-document", tags=["Document Verification"])
 async def verify_document_endpoint(
@@ -282,13 +365,13 @@ async def verify_document_endpoint(
 
     Extracts text from the uploaded document and checks if `username` appears in it.
 
-    - **PDF** — text extracted directly (no OCR needed)
-    - **Image** — OCR via Tesseract (must be installed for image docs)
+    - **PDF** â€” text extracted directly (no OCR needed)
+    - **Image** â€” OCR via Tesseract (must be installed for image docs)
 
     **Response:**
-    - `verified` — true if name found in document
-    - `matched_text` — the part of the name that was matched
-    - `doc_type` — `pdf` or `image`
+    - `verified` â€” true if name found in document
+    - `matched_text` â€” the part of the name that was matched
+    - `doc_type` â€” `pdf` or `image`
     """
     doc_path = await save_document(document)
     try:
@@ -350,3 +433,8 @@ def proxy_image(url: str):
         raise HTTPException(status_code=400, detail=f"Failed to fetch image: {str(e)}")
 
 # /analyze-frame endpoint removed. Liveness processing now handled in frontend.
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 1001))
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)

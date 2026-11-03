@@ -13,3 +13,4 @@ aiofiles==24.1.0
 insightface
 onnxruntime
 pymupdf
+rapidocr-onnxruntime>=1.4.0
