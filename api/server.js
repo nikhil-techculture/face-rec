@@ -426,7 +426,7 @@ async function saveBankDetailsAndChequeToCms(bankResult, chequeBase64Value, rawT
     ...(typeof extraPayload === "object" && extraPayload !== null ? extraPayload : {})
   });
 
-  const targetUrl = isRekyc ? CMS_REKYC_UPDATE_SIGNATURE_SELFIE_URL : CMS_UPDATE_PROFILE_URL;
+  const targetUrl = CMS_UPDATE_PROFILE_URL;
   const headers = { "Content-Type": "application/json" };
   if (bearer) {
     headers.Authorization = bearer;
@@ -741,19 +741,19 @@ app.post("/api/match-client", upload.single("image"), async (req, res, next) => 
       try {
         const profileUpdate = isRekyc
           ? await saveRekycSignatureSelfieWithFallback(
-              "selfieEkyc",
-              imageInput,
-              token || sessionToken || "",
-              req.headers.authorization || "",
-              extraFields
-            )
+            "selfieEkyc",
+            imageInput,
+            token || sessionToken || "",
+            req.headers.authorization || "",
+            extraFields
+          )
           : await updateClientProfileImageWithFallback(
-              "selfieEkyc",
-              imageInput,
-              token || sessionToken || "",
-              req.headers.authorization || "",
-              locationFields
-            );
+            "selfieEkyc",
+            imageInput,
+            token || sessionToken || "",
+            req.headers.authorization || "",
+            locationFields
+          );
         result.profile_updated = profileUpdate.updated;
         result.profile_update_message = profileUpdate.message;
         if (profileUpdate.data) {
@@ -868,19 +868,19 @@ app.post("/api/validate-signature", upload.single("image"), async (req, res, nex
         const signatureBase64ForSave = result.normalized_base64 || imageInput.base64;
         const profileUpdate = isRekyc
           ? await saveRekycSignatureWithFallback(
-              "wetSignature",
-              signatureBase64ForSave,
-              imageInput,
-              token || sessionToken || "",
-              req.headers.authorization || "",
-              extraFields
-            )
+            "wetSignature",
+            signatureBase64ForSave,
+            imageInput,
+            token || sessionToken || "",
+            req.headers.authorization || "",
+            extraFields
+          )
           : await updateClientProfileImage(
-              "wetSignature",
-              signatureBase64ForSave,
-              token || sessionToken || "",
-              req.headers.authorization || ""
-            );
+            "wetSignature",
+            signatureBase64ForSave,
+            token || sessionToken || "",
+            req.headers.authorization || ""
+          );
         result.profile_updated = profileUpdate.updated;
         result.profile_update_message = profileUpdate.message;
         if (profileUpdate.data) {
@@ -965,7 +965,7 @@ app.post(
     try {
       const { username, token, sessionToken, isFromSegmentUpdate } = req.body;
       if (!username) return res.status(400).json({ error: "Field 'username' is required." });
-      if (!req.file)  return res.status(400).json({ error: "Field 'document' (file) is required." });
+      if (!req.file) return res.status(400).json({ error: "Field 'document' (file) is required." });
 
       const result = await forwardMultiFileToPython(
         "/verify-document",
@@ -1096,7 +1096,7 @@ app.post(
  *   - Body JSON / form: 'chequeBase64', 'imageBase64', or 'fileBase64'
  */
 app.post(
-  ["/api/read-cheque", "/read-cheque"],
+  "/api/read-cheque",
   (req, res, next) => {
     uploadWithDoc.fields([
       { name: "cheque", maxCount: 1 },
