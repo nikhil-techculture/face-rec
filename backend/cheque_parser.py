@@ -800,13 +800,13 @@ def extract_micr_and_cheque_number(
 
     max_y = max(b.norm_y for b in digit_blocks)
 
-    # Focus on blocks located in the bottom-most band (within 0.06 vertical delta of lowest digit block)
+    # Focus on blocks located in the bottom-most band (within 0.09 vertical delta or >= 0.80 of cheque height)
     band_blocks = []
     for b in digit_blocks:
         t_up = b.text.upper()
-        if any(ann in t_up for ann in ["PLEASE", "SIGN", "HOLDER", "NAME", "DATE", "PAYABLE", "RUPEES"]):
+        if any(ann in t_up for ann in ["PLEASE", "SIGN", "HOLDER", "NAME", "DATE", "PAYABLE", "RUPEES", "BEARER"]):
             continue
-        if abs(b.norm_y - max_y) <= 0.06:
+        if abs(b.norm_y - max_y) <= 0.09 or b.norm_y >= 0.80:
             band_blocks.append(b)
 
     # Sort strictly left-to-right (horizontal reading order)
@@ -819,39 +819,57 @@ def extract_micr_and_cheque_number(
 
     for b in band_blocks:
         # Split by whitespace and common OCR delimiter characters for MICR E-13B font
-        raw_parts = re.split(r"[\s\:\;\⑈\⑆\|\'\"\`]+", b.text)
+        raw_parts = re.split(r"[\s\:\;\⑈\⑆\|\'\"\`\-\_.\,\/\\]+", b.text)
         for part in raw_parts:
             digits = re.sub(r"\D", "", part)
             if digits:
                 tokens.append(digits)
 
+    # If first token contains merged cheque number (6 digits) and MICR code (9 digits), unpack them
+    expanded_tokens = []
+    for idx, t in enumerate(tokens):
+        if idx == 0 and len(t) >= 15:
+            expanded_tokens.append(t[:6])
+            expanded_tokens.append(t[6:15])
+            if len(t) > 15:
+                expanded_tokens.append(t[15:])
+        else:
+            expanded_tokens.append(t)
+    tokens = expanded_tokens
+
     cheque_no = None
     micr_code = None
 
     # Enforce CTS-2010 positional mapping:
-    # 1st number is Cheque Number (6 digits)
+    # 1st number is Cheque Number (typically 6 digits)
     if len(tokens) >= 1:
         cheque_no = tokens[0]
         if len(cheque_no) > 6:
             cheque_no = cheque_no[:6]
 
-    # 2nd number is MICR Code (9 digits)
+    # 2nd number in CTS-2010 cheque bottom row is ALWAYS the MICR code (9 digits)
     if len(tokens) >= 2:
         candidate_micr = tokens[1]
         if len(candidate_micr) == 9:
             micr_code = candidate_micr
-        elif len(candidate_micr) == 10:
-            # Trailing OCR artifact delimiter often recognized as 1 or :
-            micr_code = candidate_micr[:9]
         elif len(candidate_micr) == 3 and len(tokens) >= 3 and len(tokens[2]) == 6:
             # City code (3 digits) split from bank/branch (6 digits)
             micr_code = candidate_micr + tokens[2]
+        elif len(candidate_micr) == 3 and len(tokens) >= 4 and len(tokens[2]) == 3 and len(tokens[3]) == 3:
+            # City (3 digits) + Bank (3 digits) + Branch (3 digits)
+            micr_code = candidate_micr + tokens[2] + tokens[3]
+        elif len(candidate_micr) == 6 and len(tokens) >= 3 and len(tokens[2]) == 3:
+            # City + Bank (6 digits) + Branch (3 digits)
+            micr_code = candidate_micr + tokens[2]
+        elif len(candidate_micr) == 10:
+            # Trailing OCR artifact delimiter often recognized as 1 or :
+            micr_code = candidate_micr[:9]
         elif len(candidate_micr) > 9:
             micr_code = candidate_micr[:9]
 
-    # Fallback to search among all bottom tokens if positional didn't yield 9 digits
-    if not micr_code:
-        for t in tokens:
+    # Fallback to search among all bottom tokens from position 1 onwards if positional didn't yield 9 digits
+    if not micr_code or len(micr_code) != 9:
+        for t in tokens[1:]:
             if len(t) == 9:
                 micr_code = t
                 break
@@ -859,7 +877,23 @@ def extract_micr_and_cheque_number(
                 micr_code = t[:9]
                 break
 
-    # Fallback search across full text for 9 digits if not yet found
+    # Also parse from the bottom lines of full_text as a fallback if not yet found
+    if not micr_code:
+        bottom_lines = [l.strip() for l in full_text.splitlines() if l.strip()][-4:]
+        for line in reversed(bottom_lines):
+            m_9 = re.search(r"\b\d{9}\b", line)
+            if m_9:
+                micr_code = m_9.group(0)
+                break
+            m_merged = re.search(r"\b\d{15,}\b", line)
+            if m_merged:
+                val = m_merged.group(0)
+                if not cheque_no:
+                    cheque_no = val[:6]
+                micr_code = val[6:15]
+                break
+
+    # Fallback search across entire full text for 9 digits if not yet found
     if not micr_code:
         m = re.search(r"\b\d{9}\b", full_text)
         if m:
@@ -899,7 +933,6 @@ def read_cheque(file_path: str) -> Dict[str, Any]:
             "success": False,
             "error": f"Image quality is too low to process cheque: {issues_str}",
             "doc_type": doc_type,
-            "image_quality": image_quality,
             "issues": image_quality.get("issues", []),
             "account_number": None,
             "account_number_verification": None,
@@ -912,8 +945,7 @@ def read_cheque(file_path: str) -> Dict[str, Any]:
             "cheque_number": None,
             "micr_code": None,
             "confidence": 0.0,
-            "confidence_scores": {},
-            "raw_text": ""
+            "confidence_scores": {}
         }
 
     # 3. Automatically orient cheque (handles portrait scans & upside-down orientation)
@@ -941,7 +973,6 @@ def read_cheque(file_path: str) -> Dict[str, Any]:
         "doc_type": doc_type,
         "account_number": acc_num,
         "account_number_verification": acc_verification,
-        "image_quality": image_quality,
         "ifsc_code": ifsc,
         "bank_name": bank_name,
         "branch_details": {
@@ -960,7 +991,6 @@ def read_cheque(file_path: str) -> Dict[str, Any]:
             "bank_name": round(bank_conf, 2),
             "branch": round(branch_conf, 2),
             "account_holder_name": round(holder_conf, 2),
-        },
-        "raw_text": full_text
+        }
     }
 

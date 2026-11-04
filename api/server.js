@@ -383,7 +383,7 @@ async function saveBankStatementPdf(pdfBase64, rawToken, authorizationHeader, ex
   );
 }
 
-async function saveBankDetailsAndChequeToCms(bankResult, chequeBase64Value, rawToken, authorizationHeader, extraPayload = {}, isRekyc = false) {
+async function saveBankDetailsAndChequeToCms(bankResult, chequeBase64Value, rawToken, authorizationHeader, extraPayload = {}, isRekyc = false, mimeType = "image/jpeg") {
   const bearer = buildBearerToken(rawToken, authorizationHeader);
   if (!bearer && !extraPayload.clientId) {
     return {
@@ -394,12 +394,14 @@ async function saveBankDetailsAndChequeToCms(bankResult, chequeBase64Value, rawT
   }
 
   const cleanBase64 = stripDataUriPrefix(chequeBase64Value);
-  const payload = {
+  const dataUrl = toImageDataUrl(cleanBase64, mimeType);
+
+  const buildPayload = (imageVal) => ({
     // Cheque document in base64
-    chequeCopy: cleanBase64,
-    chequeImage: cleanBase64,
-    cancelledCheque: cleanBase64,
-    bankProof: cleanBase64,
+    chequeCopy: imageVal,
+    chequeImage: imageVal,
+    cancelledCheque: imageVal,
+    bankProof: imageVal,
 
     // Account & Bank details
     accountNumber: bankResult.account_number || "",
@@ -419,29 +421,87 @@ async function saveBankDetailsAndChequeToCms(bankResult, chequeBase64Value, rawT
     micr_code: bankResult.micr_code || "",
     chequeNumber: bankResult.cheque_number || "",
     cheque_number: bankResult.cheque_number || "",
-    isRekyc: isRekyc,
+    isRekyc: Boolean(isRekyc),
 
     ...(typeof extraPayload === "object" && extraPayload !== null ? extraPayload : {})
-  };
+  });
 
-  const targetUrl = CMS_UPDATE_PROFILE_URL;
+  const targetUrl = isRekyc ? CMS_REKYC_UPDATE_SIGNATURE_SELFIE_URL : CMS_UPDATE_PROFILE_URL;
   const headers = { "Content-Type": "application/json" };
   if (bearer) {
     headers.Authorization = bearer;
   }
 
-  const { data } = await axios.post(targetUrl, payload, {
-    headers,
-    timeout: 20000
-  });
+  async function sendCmsRequest(payload) {
+    const response = await axios.post(targetUrl, payload, {
+      headers,
+      timeout: 20000
+    });
 
-  return {
-    updated: true,
-    skipped: false,
-    message: data?.message || "Client profile updated with bank details and cheque successfully.",
-    data,
-    payload
-  };
+    const data = response.data;
+    if (data && (data.success === false || data.status === "error" || data.status === "failed" || data.status === false)) {
+      const errMsg = data.message || data.error || "CMS returned an unsuccessful status.";
+      const error = new Error(errMsg);
+      error.cmsData = data;
+      error.isCmsBusinessError = true;
+      throw error;
+    }
+
+    return {
+      updated: true,
+      skipped: false,
+      message: data?.message || "Client profile updated with bank details and cheque successfully.",
+      data,
+      payload
+    };
+  }
+
+  try {
+    return await sendCmsRequest(buildPayload(cleanBase64));
+  } catch (firstError) {
+    if (firstError.isCmsBusinessError) {
+      console.warn("[PROFILE_UPDATE] CMS rejected bank details update:", {
+        url: targetUrl,
+        message: firstError.message,
+        data: firstError.cmsData
+      });
+      return {
+        updated: false,
+        skipped: false,
+        status: 400,
+        error: firstError.cmsData || firstError.message,
+        message: firstError.message,
+        data: firstError.cmsData || null
+      };
+    }
+
+    if (dataUrl && dataUrl !== cleanBase64 && firstError.response?.status === 400) {
+      try {
+        return await sendCmsRequest(buildPayload(dataUrl));
+      } catch (retryError) {
+        // Fall back to handling original error below
+      }
+    }
+
+    const status = firstError.response?.status;
+    const errorData = firstError.response?.data;
+    const errorMessage =
+      errorData?.message ||
+      errorData?.error ||
+      (typeof errorData === "string" ? errorData : null) ||
+      (firstError.code === "ECONNABORTED" ? "CMS request timed out." : null) ||
+      firstError.message ||
+      "Failed to update client profile with bank details.";
+
+    return {
+      updated: false,
+      skipped: false,
+      status: status || 500,
+      error: errorData || errorMessage,
+      message: errorMessage,
+      data: errorData || null
+    };
+  }
 }
 
 function extractDigioSelfieImage(payload) {
@@ -1036,7 +1096,7 @@ app.post(
  *   - Body JSON / form: 'chequeBase64', 'imageBase64', or 'fileBase64'
  */
 app.post(
-  "/api/read-cheque",
+  ["/api/read-cheque", "/read-cheque"],
   (req, res, next) => {
     uploadWithDoc.fields([
       { name: "cheque", maxCount: 1 },
@@ -1055,7 +1115,15 @@ app.post(
       const authHeader = req.headers.authorization || req.headers.token || req.headers["x-access-token"] || "";
       const isRekyc = isRekycRequest(req);
       const clientId = req.body?.clientId || req.body?.client_id || req.query?.clientId || req.query?.client_id;
-      const extraFields = isRekyc && clientId ? { clientId } : {};
+      const extraFields = {
+        ...(isRekyc && clientId ? { clientId } : {}),
+        ...(req.body?.selfie ? { selfie: req.body.selfie, selfieEkyc: req.body.selfie } : {}),
+        ...(req.body?.selfieEkyc ? { selfieEkyc: req.body.selfieEkyc } : {}),
+        ...(req.body?.wetSignature ? { wetSignature: req.body.wetSignature } : {}),
+        ...(req.body?.signature ? { signature: req.body.signature, wetSignature: req.body.signature } : {}),
+        ...(req.body?.latitude ? { latitude: req.body.latitude } : {}),
+        ...(req.body?.longitude ? { longitude: req.body.longitude } : {})
+      };
 
       if (!file && !chequeBase64) {
         return res.status(400).json({
@@ -1086,32 +1154,41 @@ app.post(
 
         if (bearer || extraFields.clientId) {
           try {
+            const mimeType = file?.mimetype || (chequeBase64 && chequeBase64.startsWith("data:") ? chequeBase64.split(";")[0].replace("data:", "") : "image/jpeg");
             const profileUpdate = await saveBankDetailsAndChequeToCms(
               result,
               chequeBase64Value,
               token || sessionToken || "",
               authHeader,
               extraFields,
-              isRekyc
+              isRekyc,
+              mimeType
             );
             result.profile_updated = profileUpdate.updated;
             result.profile_update_message = profileUpdate.message;
-            if (profileUpdate.data) {
-              result.profile_update_data = profileUpdate.data;
+            if (profileUpdate.updated) {
+              if (profileUpdate.data) {
+                result.profile_update_data = profileUpdate.data;
+              }
+              result.cms_save_payload = {
+                chequeCopy: chequeBase64Value ? `<base64, ${chequeBase64Value.length} characters>` : null,
+                accountNumber: result.account_number,
+                ifscCode: result.ifsc_code,
+                bankName: result.bank_name,
+                branchName: result.branch_details?.branch_name,
+                branchAddress: result.branch_details?.address || result.address,
+                accountHolderName: result.account_holder_name,
+                micrCode: result.micr_code,
+                chequeNumber: result.cheque_number
+              };
+            } else if (!profileUpdate.skipped) {
+              result.profile_update_error = profileUpdate.error || profileUpdate.message;
+              if (profileUpdate.status) {
+                result.profile_update_status = profileUpdate.status;
+              }
             }
-            result.cms_save_payload = {
-              chequeCopy: chequeBase64Value ? `<base64, ${chequeBase64Value.length} characters>` : null,
-              accountNumber: result.account_number,
-              ifscCode: result.ifsc_code,
-              bankName: result.bank_name,
-              branchName: result.branch_details?.branch_name,
-              branchAddress: result.branch_details?.address || result.address,
-              accountHolderName: result.account_holder_name,
-              micrCode: result.micr_code,
-              chequeNumber: result.cheque_number
-            };
           } catch (saveError) {
-            console.error("[PROFILE_UPDATE] Failed to update client profile with bank details and cheque.", {
+            console.error("[PROFILE_UPDATE] Unexpected error in profile update handler:", {
               status: saveError.response?.status || "internal",
               message: saveError.message,
               data: saveError.response?.data
@@ -1119,6 +1196,7 @@ app.post(
             result.profile_updated = false;
             result.profile_update_message = "Bank details fetched but client profile update failed.";
             result.profile_update_error = saveError.response?.data || saveError.message;
+            result.profile_update_status = saveError.response?.status || 500;
           }
         } else {
           result.profile_updated = false;
@@ -1129,7 +1207,33 @@ app.post(
         result.profile_update_message = "Bank details could not be extracted from cheque.";
       }
 
-      res.status(200).json(result);
+      // 1. Remove raw_text and image_quality as requested
+      if (result) {
+        delete result.raw_text;
+        delete result.image_quality;
+      }
+
+      // 2. If profile update failed (e.g. status 400 or error returned), set success: false instead of true
+      const isProfileUpdateFailed =
+        result?.profile_updated === false &&
+        (result.profile_update_error || result.profile_update_status === false || (typeof result.profile_update_status === "number" && result.profile_update_status >= 400));
+
+      if (isProfileUpdateFailed) {
+        result.success = false;
+        const statusCode = (typeof result.profile_update_status === "number" && result.profile_update_status >= 400)
+          ? result.profile_update_status
+          : 400;
+        return res.status(statusCode).json(result);
+      }
+
+      if (result && !result.success) {
+        const statusCode = (typeof result.profile_update_status === "number" && result.profile_update_status >= 400)
+          ? result.profile_update_status
+          : 400;
+        return res.status(statusCode).json(result);
+      }
+
+      return res.status(200).json(result);
     } catch (err) {
       if (err.response) return res.status(err.response.status).json(err.response.data);
       next(err);
