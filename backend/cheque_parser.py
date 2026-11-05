@@ -75,15 +75,26 @@ KNOWN_BANK_NAMES: List[str] = [
     "AIRTEL PAYMENTS BANK", "PAYTM PAYMENTS BANK", "INDIA POST PAYMENTS BANK"
 ]
 
-# ─── Common Indian Surnames for Unmerging OCR Text ────────────────────────────
+# ─── Common Indian Surnames & Middle Names for Unmerging OCR Text ────────────
 
 COMMON_SURNAMES = [
-    "RAWAT", "KUMAR", "SHARMA", "SINGH", "PATEL", "GUPTA", "VERMA", "MALHOTRA",
-    "KHAN", "ALI", "SHAH", "MEHTA", "JAIN", "REDDY", "RAO", "NAIR", "JOSHI",
-    "DAS", "SEN", "ROY", "BOSE", "GHOSH", "BHAT", "CHOPRA", "TIWARI", "MISHRA",
-    "PANDEY", "YADAV", "CHOUDHARY", "AGARWAL", "BANSAL", "MITTAL", "GARG",
-    "SAXENA", "MUKHERJEE", "CHATTERJEE", "BANERJEE", "DUTTA", "GOWDA", "MENON"
+    "MUKHERJEE", "CHATTERJEE", "BANERJEE", "CHOUDHARY", "CHOWDHURY", "MALHOTRA",
+    "TRIPATHI", "AGGARWAL", "AGARWAL", "BHATTACHARYA", "CHAKRABORTY",
+    "SHARMA", "VERMA", "GUPTA", "RAWAT", "SINGH", "PATEL", "MEHTA", "REDDY",
+    "JOSHI", "TIWARI", "MISHRA", "PANDEY", "YADAV", "BANSAL", "MITTAL",
+    "SAXENA", "DUTTA", "GOWDA", "MENON", "SHUKLA", "DUBEY", "CHAUBEY",
+    "THAKUR", "KAPOOR", "BHATIA", "ARORA", "CHAWLA", "AHLUWALIA",
+    "KUMARI", "KUMAR", "CHANDRA", "PRASAD", "PRAKASH", "SHEKHAR",
+    "DEVI", "BHAI", "KANT", "KANTH", "NATH", "DUTT", "JEET", "PREET", "DEEP",
+    "KHAN", "SHAH", "JAIN", "NAIR", "BOSE", "BHAT", "GARG", "KAUR", "LAL", "PAL",
+    "RAO", "DAS", "SEN", "ROY", "RAM", "ALI"
 ]
+# Sorted by length descending so longer suffixes (e.g. YADAV, KUMAR) match before short ones (e.g. RAM, ALI)
+SORTED_SURNAMES = sorted(list(dict.fromkeys(COMMON_SURNAMES)), key=len, reverse=True)
+
+DO_NOT_SPLIT_NAMES = {
+    "ANJALI", "SONALI", "RUPALI", "DEEPALI", "CHAITALI", "MINAKSHI", "PARVATI", "SARASWATI"
+}
 
 # ─── Annotation / Title labels to discard from extracted values ───────────────
 
@@ -101,7 +112,8 @@ SIGNATURE_NOISE_TERMS = ANNOTATION_TITLES.union({
     "AUTHORISED SIGNATORY", "AUTHORIZED SIGNATORY", "AUTHORISED SIGNATORIES",
     "AUTHORIZED SIGNATORIES", "CHIEF EXECUTIVE OFFICER", "MANAGING DIRECTOR",
     "DIRECTOR", "PROPRIETOR", "PARTNER", "SECRETARY", "TREASURER", "CHAIRMAN",
-    "CTS 2010", "CTS-2010", "BRANCH CODE"
+    "CTS 2010", "CTS-2010", "BRANCH CODE", "CHEQUE NO", "CHEQUE ND", "CHEQUE", "CHK",
+    "A/C NO", "AC NO"
 })
 
 class ChequeOCRBlock:
@@ -371,17 +383,32 @@ def get_ifsc_branch_suffixes(ifsc: Optional[str]) -> List[str]:
 
 # ─── Text Normalization Helpers ───────────────────────────────────────────────
 
+def split_single_merged_token(token: str) -> List[str]:
+    """Recursively splits a single merged token like 'MUKULKUMARYADAV' into ['MUKUL', 'KUMAR', 'YADAV']."""
+    t_up = token.upper().strip()
+    if len(t_up) < 6 or t_up in DO_NOT_SPLIT_NAMES:
+        return [token]
+
+    for s in SORTED_SURNAMES:
+        if t_up.endswith(s) and len(t_up) > len(s):
+            prefix = t_up[:-len(s)].strip()
+            min_prefix_len = 4 if len(s) <= 3 else 3
+            if len(prefix) >= min_prefix_len and prefix.isalpha():
+                if t_up in DO_NOT_SPLIT_NAMES:
+                    return [token]
+                sub_parts = split_single_merged_token(prefix)
+                return sub_parts + [s]
+    return [token]
+
 def split_merged_name(name: str) -> str:
-    """Splits merged OCR names like 'MANOJRAWAT' into 'MANOJ RAWAT'."""
+    """Splits merged OCR names like 'MUKULKUMARYADAV' or 'MANOJRAWAT' into 'MUKUL KUMAR YADAV'."""
     if not name:
         return name
-    name_up = name.upper().strip()
-    for s in COMMON_SURNAMES:
-        if name_up.endswith(s) and len(name_up) > len(s):
-            prefix = name_up[:-len(s)].strip()
-            if len(prefix) >= 2 and prefix.isalpha():
-                return f"{prefix} {s}"
-    return name
+    words = name.split()
+    all_parts = []
+    for w in words:
+        all_parts.extend(split_single_merged_token(w))
+    return " ".join(all_parts)
 
 def sanitize_address_pincode(addr: str) -> str:
     """Fix common OCR letter confusions in Indian PIN codes (e.g. 4O0001 -> 400001)."""
@@ -471,6 +498,10 @@ def extract_bank_name(blocks: List[ChequeOCRBlock], ifsc: Optional[str], full_te
             if "BANK" in words:
                 bank_idx = words.index("BANK")
                 candidate_words = words[:bank_idx + 1]
+                if len(words) > bank_idx + 2 and words[bank_idx + 1] == "OF" and words[bank_idx + 2] == "INDIA":
+                    candidate_words = words[:bank_idx + 3]
+                elif "OF INDIA" in upper_text and " ".join(candidate_words) in {"UNION BANK", "STATE BANK", "CENTRAL BANK", "BANK"}:
+                    candidate_words.extend(["OF", "INDIA"])
                 if len(candidate_words) >= 2:
                     return title_case_bank(" ".join(candidate_words)), b.confidence
 
@@ -642,14 +673,18 @@ def extract_branch_details(
     full_text: str
 ) -> Tuple[Optional[str], Optional[str], float]:
     """Extracts (branch_name, branch_address, confidence)."""
-    header_blocks = [b for b in blocks if b.norm_y < 0.40 and b.norm_x < 0.85]
+    header_blocks = [b for b in blocks if b.norm_y < 0.25 and b.norm_x < 0.85]
     branch_name = None
     address_lines: List[str] = []
     conf = 0.85
 
-    # Check for explicit "Branch: ..." or "Br: ..."
+    # Check for explicit "Branch: ..." or "Br: ..." or "<Location> Branch"
     branch_label_pattern = re.compile(
         r"(?:BRANCH|BR|BO)[\s\.:#\-_]+([A-Za-z0-9\s,\-\.]{3,50})",
+        re.IGNORECASE
+    )
+    branch_prefix_pattern = re.compile(
+        r"\b([A-Za-z0-9\s,\-\.]{3,30})\s+(?:BRANCH|BR)\b",
         re.IGNORECASE
     )
     for b in header_blocks:
@@ -662,19 +697,31 @@ def extract_branch_details(
                 cand 
                 and len(cand) >= 3 
                 and cand.upper() not in ANNOTATION_TITLES 
-                and cand.upper() not in {"ADDRESS", "BRANCH ADDRESS", "BRANCH", "BANK"}
+                and cand.upper() not in {"ADDRESS", "BRANCH ADDRESS", "BRANCH", "BANK", "OF INDIA", "INDIA"}
                 and not branch_name
             ):
                 branch_name = format_title_name(cand)
                 conf = max(conf, b.confidence)
 
+        m_pre = branch_prefix_pattern.search(b.text)
+        if m_pre and not branch_name:
+            cand = m_pre.group(1).strip().strip(" ,.-:")
+            if (
+                cand 
+                and len(cand) >= 3 
+                and cand.upper() not in ANNOTATION_TITLES 
+                and cand.upper() not in {"ADDRESS", "BRANCH ADDRESS", "BRANCH", "BANK", "OF INDIA", "INDIA"}
+            ):
+                branch_name = format_title_name(f"{cand} Branch")
+                conf = max(conf, b.confidence)
+
     skip_terms = ANNOTATION_TITLES.union({
-        "VALID FOR", "MONTHS ONLY", "PAY", "RUPEES", "DATE", "OR BEARER", "WEEKLY HOLIDAY"
+        "VALID FOR", "MONTHS ONLY", "PAY", "RUPEES", "DATE", "OR BEARER", "WEEKLY HOLIDAY", "OF INDIA", "INDIA"
     })
 
     for b in header_blocks:
         t_up = b.text.upper().strip()
-        if any(st in t_up for st in ["RUPEES", "PAY ", "BEARER", "VALID FOR", "DATE", "MONTHS"]):
+        if any(st in t_up for st in ["RUPEES", "PAY", "BEARER", "VALID FOR", "DATE", "MONTHS"]):
             continue
         if any(t_up == st or t_up.startswith(st + ":") for st in skip_terms):
             continue
@@ -720,7 +767,7 @@ def extract_account_holder_name(blocks: List[ChequeOCRBlock], full_text: str) ->
     """Extracts (account_holder_name, signatory_name, confidence)."""
     sig_zone_blocks = [
         b for b in blocks 
-        if b.norm_x >= 0.38 and 0.50 <= b.norm_y <= 0.88
+        if b.norm_x >= 0.50 and 0.50 <= b.norm_y <= 0.88
     ]
     sig_zone_blocks.sort(key=lambda b: (b.norm_y, b.norm_x))
 
@@ -753,6 +800,15 @@ def extract_account_holder_name(blocks: List[ChequeOCRBlock], full_text: str) ->
             candidate_person_names.append((split_name, b.confidence))
 
     if candidate_person_names:
+        if len(candidate_person_names) > 1 and not company_name:
+            # Check if candidates are distinct joint holders or signature + printed name of same person
+            names = [n for n, _ in candidate_person_names]
+            w_sets = [set(n.upper().split()) for n in names]
+            has_overlap = any(bool(w_sets[i] & w_sets[j]) for i in range(len(w_sets)) for j in range(i + 1, len(w_sets)))
+            if not has_overlap:
+                names_combined = " / ".join(names)
+                avg_conf = sum(conf for _, conf in candidate_person_names) / len(candidate_person_names)
+                return names_combined, None, avg_conf
         signatory_name, signatory_conf = candidate_person_names[-1]
 
     if company_name:
@@ -777,7 +833,7 @@ def is_valid_holder_name(text: str) -> bool:
         return False
     if any(bank in t_up for bank in KNOWN_BANK_NAMES):
         return False
-    if any(kw in t_up for kw in ["BEARER", "RUPEES", "CTS-2010", "PAYABLE", "BRANCH", "CLEARING"]):
+    if any(kw in t_up for kw in ["BEARER", "RUPEES", "CTS-2010", "PAYABLE", "BRANCH", "CLEARING", "CHEQUE", "CHK", "A/C", "AC NO"]):
         return False
     words = [w for w in text.split() if len(w) >= 2 and w.isalpha()]
     return len(words) >= 1
@@ -798,11 +854,16 @@ def extract_micr_and_cheque_number(
     if not digit_blocks:
         return None, None, 0.0
 
-    max_y = max(b.norm_y for b in digit_blocks)
+    # Focus strictly on CTS-2010 bottom band (norm_y >= 0.75)
+    cts_candidates = [b for b in digit_blocks if b.norm_y >= 0.75]
+    if not cts_candidates:
+        return None, None, 0.0
+
+    max_y = max(b.norm_y for b in cts_candidates)
 
     # Focus on blocks located in the bottom-most band (within 0.09 vertical delta or >= 0.80 of cheque height)
     band_blocks = []
-    for b in digit_blocks:
+    for b in cts_candidates:
         t_up = b.text.upper()
         if any(ann in t_up for ann in ["PLEASE", "SIGN", "HOLDER", "NAME", "DATE", "PAYABLE", "RUPEES", "BEARER"]):
             continue
@@ -844,7 +905,10 @@ def extract_micr_and_cheque_number(
     # 1st number is Cheque Number (typically 6 digits)
     if len(tokens) >= 1:
         cheque_no = tokens[0]
-        if len(cheque_no) > 6:
+        # In E-13B MICR font, vertical delimiter ⑈ or " is often read as '1' or '0' (e.g. 1446783 -> 446783)
+        if len(cheque_no) == 7 and cheque_no.startswith("1"):
+            cheque_no = cheque_no[1:]
+        elif len(cheque_no) > 6:
             cheque_no = cheque_no[:6]
 
     # 2nd number in CTS-2010 cheque bottom row is ALWAYS the MICR code (9 digits)
@@ -950,6 +1014,21 @@ def read_cheque(file_path: str) -> Dict[str, Any]:
 
     # 3. Automatically orient cheque (handles portrait scans & upside-down orientation)
     upright_img, blocks = auto_orient_cheque(raw_img)
+
+    # 3b. Verify bottom CTS-2010 band (norm_y >= 0.78)
+    # If the bottom band OCR didn't catch the E-13B MICR line, run a dedicated crop of the bottom 25%
+    bottom_digits = [b for b in blocks if b.norm_y >= 0.78 and re.search(r"\d", b.text)]
+    if not bottom_digits:
+        h_up, w_up = upright_img.shape[:2]
+        crop_top = int(h_up * 0.75)
+        bottom_crop = upright_img[crop_top:, :]
+        engine = get_ocr_engine()
+        res_crop, _ = engine(bottom_crop)
+        if res_crop:
+            for box, text, score in res_crop:
+                abs_box = [[pt[0], pt[1] + crop_top] for pt in box]
+                b_crop = ChequeOCRBlock(text, abs_box, float(score), w_up, h_up)
+                blocks.append(b_crop)
 
     # 4. Compile full text
     full_text = "\n".join(b.text for b in blocks)
